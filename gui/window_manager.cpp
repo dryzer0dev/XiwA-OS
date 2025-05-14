@@ -5,7 +5,6 @@
 #define SCREEN_HEIGHT 768
 #define MAX_WINDOWS 32
 
-// Structure pour représenter une fenêtre
 typedef struct {
     int x, y;
     int width, height;
@@ -17,16 +16,12 @@ typedef struct {
     void* user_data;
 } window_t;
 
-// Table des fenêtres
 window_t* windows[MAX_WINDOWS];
 int current_window = 0;
 
-// Buffer de l'écran
 uint32_t* screen_buffer;
 
-// Fonction pour créer une nouvelle fenêtre
 window_t* create_window(const char* title, int x, int y, int width, int height) {
-    // Trouver un slot libre
     int slot = -1;
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (windows[i] == 0) {
