@@ -1,94 +1,59 @@
 # XiMonOS
 
-XiMonOS est un système d'exploitation moderne et minimaliste, développé à des fins éducatives.
-
-## Fonctionnalités
-
-- Noyau 32 bits
-- Gestion de la mémoire virtuelle
-- Système de fichiers simple
-- Interface graphique basique
-- Gestion des processus
-- Support du clavier et de la souris
+XiMonOS est un système d'exploitation éducatif développé en C et assembleur.
 
 ## Prérequis
-
-Pour compiler XiMonOS, vous aurez besoin de :
 
 - GCC (version 4.8 ou supérieure)
 - NASM (version 2.10 ou supérieure)
 - Make
-- QEMU (pour tester)
-
-Sur Ubuntu/Debian :
-```bash
-sudo apt-get install gcc nasm make qemu-system-x86
-```
-
-Sur Windows :
-- Installez MinGW-w64 pour GCC
-- Installez NASM
-- Installez Make
-- Installez QEMU
-
-## Compilation
-
-1. Clonez le dépôt :
-```bash
-git clone https://github.com/votre-username/XiMonOS.git
-cd XiMonOS
-```
-
-2. Compilez le projet :
-```bash
-cd build
-make
-```
-
-3. Exécutez dans QEMU :
-```bash
-make run
-```
+- QEMU (pour l'émulation)
 
 ## Structure du projet
 
 ```
-XiMonOS/
+ximonos/
 ├── boot/           # Code du bootloader
-├── kernel/         # Code du noyau
-│   ├── drivers/    # Pilotes matériels
-│   ├── mm/         # Gestion de la mémoire
-│   └── fs/         # Système de fichiers
-├── gui/            # Interface graphique
-│   └── assets/     # Ressources graphiques
-├── apps/           # Applications
-└── build/          # Fichiers de compilation
+├── kernel/         # Code du kernel
+├── lib/            # Bibliothèques système
+├── obj/            # Fichiers objets générés
+├── Makefile        # Configuration de compilation
+├── link.ld         # Script de liaison
+└── README.md       # Documentation
 ```
 
-## Nouvelle structure de dossiers (inspirée du noyau Linux)
+## Compilation
 
-- kernel/ : code principal du noyau
-- lib/ : bibliothèques partagées
-- mm/ : gestion de la mémoire
-- net/ : pile réseau
-- rust/ : code Rust
-- samples/ : exemples et démos
-- scripts/ : scripts utilitaires
-- security/ : sécurité et sandboxing
-- sound/ : gestion du son
-- tools/ : outils de build et de debug
-- usr/ : applications utilisateur
-- virt/ : virtualisation et hyperviseur
+Pour compiler le projet :
 
-Le code est optimisé pour la vitesse, l'esthétique et l'animation, sans commentaires pour plus de clarté visuelle.
+```bash
+make
+```
 
-## Développement
+Pour nettoyer les fichiers générés :
 
-Pour ajouter de nouvelles fonctionnalités :
+```bash
+make clean
+```
 
-1. Ajoutez vos fichiers source dans les dossiers appropriés
-2. Mettez à jour le Makefile si nécessaire
-3. Recompilez avec `make`
+## Exécution
+
+Pour exécuter le système dans QEMU :
+
+```bash
+make run
+```
+
+## Fonctionnalités
+
+- Gestion de la mémoire
+- Gestion des processus
+- Système de fichiers
+- Interface graphique
+- Gestion des périphériques
+- Support réseau
+- Gestion audio
+- Gestion des entrées (clavier, souris)
 
 ## Licence
 
