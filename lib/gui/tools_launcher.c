@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <sqlite3.h>
 #include <curl/curl.h>
+#include <stdio.h>
 
 #define MAX_TOOLS 100
 #define TOOL_NAME_LENGTH 32
@@ -315,4 +316,127 @@ void tools_launcher_main(void) {
                 break;
         }
     }
-} 
+}
+
+void launch_hydra(void) {
+    // Vérifier/installer hydra
+    if (system("which hydra > /dev/null 2>&1") != 0) {
+        printf("Installation de Hydra...\n");
+        system("sudo apt-get install -y hydra");
+    }
+
+    char ip[64], user[32], pass[32];
+    printf("IP cible: "); scanf("%s", ip);
+    printf("Utilisateur: "); scanf("%s", user);
+    printf("Mot de passe: "); scanf("%s", pass);
+    printf("Tentative brute-force sur %s avec %s:%s\n", ip, user, pass);
+    
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "hydra -l %s -p %s %s ssh", user, pass, ip);
+    system(cmd);
+}
+
+void launch_john(void) {
+    // Vérifier/installer john
+    if (system("which john > /dev/null 2>&1") != 0) {
+        printf("Installation de John the Ripper...\n");
+        system("sudo apt-get install -y john");
+    }
+
+    char hash[256];
+    printf("Hash à cracker: "); scanf("%s", hash);
+    printf("Cracking...\n");
+    
+    FILE *tmp = fopen("/tmp/hash.txt", "w");
+    fprintf(tmp, "%s", hash);
+    fclose(tmp);
+    
+    system("john /tmp/hash.txt");
+}
+
+void launch_hashcat(void) {
+    // Vérifier/installer hashcat
+    if (system("which hashcat > /dev/null 2>&1") != 0) {
+        printf("Installation de Hashcat...\n");
+        system("sudo apt-get install -y hashcat");
+    }
+
+    char hash[256], wordlist[256];
+    printf("Hash: "); scanf("%s", hash);
+    printf("Wordlist: "); scanf("%s", wordlist);
+    printf("Cracking GPU...\n");
+    
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "hashcat -m 0 %s %s", hash, wordlist);
+    system(cmd);
+}
+
+void launch_dirb(void) {
+    // Vérifier/installer dirb
+    if (system("which dirb > /dev/null 2>&1") != 0) {
+        printf("Installation de Dirb...\n");
+        system("sudo apt-get install -y dirb");
+    }
+
+    char url[128];
+    printf("URL cible: "); scanf("%s", url);
+    printf("Scan des répertoires cachés...\n");
+    
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "dirb %s", url);
+    system(cmd);
+}
+
+void launch_testdisk(void) {
+    // Vérifier/installer testdisk
+    if (system("which testdisk > /dev/null 2>&1") != 0) {
+        printf("Installation de TestDisk...\n");
+        system("sudo apt-get install -y testdisk");
+    }
+
+    printf("Scan des partitions perdues...\n");
+    system("testdisk");
+}
+
+void launch_photorec(void) {
+    // Vérifier/installer photorec (inclus dans testdisk)
+    if (system("which photorec > /dev/null 2>&1") != 0) {
+        printf("Installation de PhotoRec...\n");
+        system("sudo apt-get install -y testdisk");
+    }
+
+    printf("Récupération de fichiers supprimés...\n");
+    system("photorec");
+}
+
+void launch_theharvester(void) {
+    // Vérifier/installer theharvester
+    if (system("which theHarvester > /dev/null 2>&1") != 0) {
+        printf("Installation de TheHarvester...\n");
+        system("sudo apt-get install -y theharvester");
+    }
+
+    char domaine[128];
+    printf("Domaine: "); scanf("%s", domaine);
+    printf("Recherche d'emails et sous-domaines...\n");
+    
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "theHarvester -d %s -b all", domaine);
+    system(cmd);
+}
+
+void launch_shodan(void) {
+    // Vérifier/installer shodan
+    if (system("which shodan > /dev/null 2>&1") != 0) {
+        printf("Installation de Shodan CLI...\n");
+        system("sudo apt-get install -y python3-pip && pip3 install shodan");
+    }
+
+    char query[128];
+    printf("Recherche Shodan: "); scanf("%s", query);
+    printf("Résultats:\n");
+    
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "shodan search %s", query);
+    system(cmd);
+}
