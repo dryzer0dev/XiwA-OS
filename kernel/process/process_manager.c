@@ -11,103 +11,127 @@
 
 typedef struct {
     uint32_t eax, ebx, ecx, edx;
-    uint32_t esi, edi, ebp, esp;
+    uint32_t esi, edi, ebp;
     uint32_t eip;
+    uint32_t cs;
     uint32_t eflags;
-    uint32_t cs, ds, es, fs, gs, ss;
-} CPUState;
+    uint32_t esp;
+    uint32_t ss;
+} cpu_state_t;
 
 typedef struct {
     uint32_t thread_id;
-    CPUState state;
-    uint32_t stack[STACK_SIZE];
+    cpu_state_t cpu_state;
+    uint8_t* stack;
     bool is_running;
     uint32_t priority;
     uint32_t quantum;
-} Thread;
+} thread_t;
 
 typedef struct {
     uint32_t process_id;
-    char name[64];
+    char name[32];
     uint32_t priority;
-    Thread threads[MAX_THREADS_PER_PROCESS];
+    thread_t threads[MAX_THREADS_PER_PROCESS];
     uint32_t thread_count;
     uint32_t memory_start;
     uint32_t memory_size;
     bool is_running;
     uint32_t parent_id;
-    uint32_t exit_code;
-} Process;
+    int exit_code;
+} process_t;
 
 typedef struct {
-    Process processes[MAX_PROCESSES];
+    process_t processes[MAX_PROCESSES];
     uint32_t process_count;
     uint32_t current_process;
     uint32_t current_thread;
     uint32_t next_process_id;
-} ProcessManager;
+} process_manager_t;
 
-ProcessManager pm;
+process_manager_t process_manager;
 
 void init_process_manager() {
-    memset(&pm, 0, sizeof(ProcessManager));
-    pm.next_process_id = 1;
+    memset(&process_manager, 0, sizeof(process_manager_t));
+    process_manager.next_process_id = 1;
 }
 
-Process* create_process(const char* name, uint32_t priority) {
-    if (pm.process_count >= MAX_PROCESSES) {
-        return NULL;
+uint32_t create_process(const char* name, uint32_t priority) {
+    if (process_manager.process_count >= MAX_PROCESSES) {
+        return 0;
     }
 
-    Process* process = &pm.processes[pm.process_count++];
-    process->process_id = pm.next_process_id++;
-    strncpy(process->name, name, 63);
-    process->name[63] = '\0';
+    process_t* process = &process_manager.processes[process_manager.process_count++];
+    process->process_id = process_manager.next_process_id++;
+    strncpy(process->name, name, 31);
+    process->name[31] = '\0';
     process->priority = priority;
     process->thread_count = 0;
     process->is_running = true;
-    process->parent_id = pm.current_process;
+    process->parent_id = process_manager.current_process;
     process->exit_code = 0;
 
     // Allouer de la mémoire pour le processus
-    process->memory_start = kmalloc(1024 * 1024); // 1MB par défaut
-    process->memory_size = 1024 * 1024;
+    process->memory_start = (uint32_t)vmalloc(STACK_SIZE * MAX_THREADS_PER_PROCESS);
+    if (!process->memory_start) {
+        process_manager.process_count--;
+        return 0;
+    }
+    process->memory_size = STACK_SIZE * MAX_THREADS_PER_PROCESS;
 
-    return process;
+    return process->process_id;
 }
 
-Thread* create_thread(Process* process, void* entry_point) {
-    if (process->thread_count >= MAX_THREADS_PER_PROCESS) {
-        return NULL;
+uint32_t create_thread(uint32_t process_id, void (*entry_point)(void*), void* arg) {
+    process_t* process = NULL;
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process = &process_manager.processes[i];
+            break;
+        }
     }
 
-    Thread* thread = &process->threads[process->thread_count++];
+    if (!process || process->thread_count >= MAX_THREADS_PER_PROCESS) {
+        return 0;
+    }
+
+    thread_t* thread = &process->threads[process->thread_count++];
     thread->thread_id = process->thread_count;
+    thread->stack = (uint8_t*)(process->memory_start + (thread->thread_id - 1) * STACK_SIZE);
     thread->is_running = true;
     thread->priority = process->priority;
     thread->quantum = 100; // 100ms par défaut
 
-    // Initialiser l'état du thread
-    memset(&thread->state, 0, sizeof(CPUState));
-    thread->state.eip = (uint32_t)entry_point;
-    thread->state.esp = (uint32_t)&thread->stack[STACK_SIZE - 1];
-    thread->state.eflags = 0x202; // IF=1, IOPL=0
+    // Initialiser l'état du CPU
+    thread->cpu_state.esp = (uint32_t)thread->stack + STACK_SIZE;
+    thread->cpu_state.eip = (uint32_t)entry_point;
+    thread->cpu_state.cs = 0x08; // Segment de code noyau
+    thread->cpu_state.ss = 0x10; // Segment de données noyau
+    thread->cpu_state.eflags = 0x202; // IF=1, IOPL=0
 
-    return thread;
+    // Pousser l'argument sur la pile
+    thread->cpu_state.esp -= 4;
+    *(uint32_t*)thread->cpu_state.esp = (uint32_t)arg;
+
+    return thread->thread_id;
 }
 
 void schedule() {
+    if (process_manager.process_count == 0) {
+        return;
+    }
+
     // Trouver le prochain thread à exécuter
-    uint32_t next_process = pm.current_process;
-    uint32_t next_thread = pm.current_thread;
+    uint32_t next_process = process_manager.current_process;
+    uint32_t next_thread = process_manager.current_thread;
     uint32_t highest_priority = 0;
 
-    for (uint32_t i = 0; i < pm.process_count; i++) {
-        Process* process = &pm.processes[i];
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        process_t* process = &process_manager.processes[i];
         if (!process->is_running) continue;
 
         for (uint32_t j = 0; j < process->thread_count; j++) {
-            Thread* thread = &process->threads[j];
+            thread_t* thread = &process->threads[j];
             if (!thread->is_running) continue;
 
             if (thread->priority > highest_priority) {
@@ -118,124 +142,183 @@ void schedule() {
         }
     }
 
-    // Effectuer le changement de contexte si nécessaire
-    if (next_process != pm.current_process || next_thread != pm.current_thread) {
-        if (pm.current_process < pm.process_count) {
-            Thread* current_thread = &pm.processes[pm.current_process].threads[pm.current_thread];
-            save_cpu_state(&current_thread->state);
+    // Sauvegarder l'état du thread courant
+    if (process_manager.current_process < process_manager.process_count) {
+        process_t* current_process = &process_manager.processes[process_manager.current_process];
+        if (process_manager.current_thread < current_process->thread_count) {
+            thread_t* current_thread = &current_process->threads[process_manager.current_thread];
+            if (current_thread->is_running) {
+                // Sauvegarder l'état du CPU
+                asm volatile("movl %%eax, %0" : "=m"(current_thread->cpu_state.eax));
+                asm volatile("movl %%ebx, %0" : "=m"(current_thread->cpu_state.ebx));
+                asm volatile("movl %%ecx, %0" : "=m"(current_thread->cpu_state.ecx));
+                asm volatile("movl %%edx, %0" : "=m"(current_thread->cpu_state.edx));
+                asm volatile("movl %%esi, %0" : "=m"(current_thread->cpu_state.esi));
+                asm volatile("movl %%edi, %0" : "=m"(current_thread->cpu_state.edi));
+                asm volatile("movl %%ebp, %0" : "=m"(current_thread->cpu_state.ebp));
+                asm volatile("movl %%esp, %0" : "=m"(current_thread->cpu_state.esp));
+                asm volatile("movl (%%esp), %0" : "=r"(current_thread->cpu_state.eip));
+            }
         }
+    }
 
-        pm.current_process = next_process;
-        pm.current_thread = next_thread;
+    // Restaurer l'état du nouveau thread
+    process_manager.current_process = next_process;
+    process_manager.current_thread = next_thread;
 
-        Thread* next_thread_ptr = &pm.processes[next_process].threads[next_thread];
-        load_cpu_state(&next_thread_ptr->state);
+    process_t* next_process_ptr = &process_manager.processes[next_process];
+    thread_t* next_thread_ptr = &next_process_ptr->threads[next_thread];
+
+    // Restaurer l'état du CPU
+    asm volatile("movl %0, %%eax" : : "m"(next_thread_ptr->cpu_state.eax));
+    asm volatile("movl %0, %%ebx" : : "m"(next_thread_ptr->cpu_state.ebx));
+    asm volatile("movl %0, %%ecx" : : "m"(next_thread_ptr->cpu_state.ecx));
+    asm volatile("movl %0, %%edx" : : "m"(next_thread_ptr->cpu_state.edx));
+    asm volatile("movl %0, %%esi" : : "m"(next_thread_ptr->cpu_state.esi));
+    asm volatile("movl %0, %%edi" : : "m"(next_thread_ptr->cpu_state.edi));
+    asm volatile("movl %0, %%ebp" : : "m"(next_thread_ptr->cpu_state.ebp));
+    asm volatile("movl %0, %%esp" : : "m"(next_thread_ptr->cpu_state.esp));
+    asm volatile("jmp *%0" : : "r"(next_thread_ptr->cpu_state.eip));
+}
+
+void terminate_process(uint32_t process_id) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_t* process = &process_manager.processes[i];
+
+            // Terminer tous les threads
+            for (uint32_t j = 0; j < process->thread_count; j++) {
+                process->threads[j].is_running = false;
+            }
+
+            // Libérer la mémoire
+            vfree((void*)process->memory_start);
+
+            // Supprimer le processus
+            memmove(&process_manager.processes[i],
+                    &process_manager.processes[i + 1],
+                    (process_manager.process_count - i - 1) * sizeof(process_t));
+            process_manager.process_count--;
+
+            // Si c'était le processus courant, planifier un nouveau
+            if (i == process_manager.current_process) {
+                schedule();
+            }
+            break;
+        }
     }
 }
 
-void terminate_process(Process* process) {
-    if (!process) return;
+void terminate_thread(uint32_t process_id, uint32_t thread_id) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_t* process = &process_manager.processes[i];
 
-    process->is_running = false;
-    kfree((void*)process->memory_start);
+            for (uint32_t j = 0; j < process->thread_count; j++) {
+                if (process->threads[j].thread_id == thread_id) {
+                    process->threads[j].is_running = false;
 
-    // Si c'est le processus courant, planifier un nouveau processus
-    if (process == &pm.processes[pm.current_process]) {
-        schedule();
+                    // Supprimer le thread
+                    memmove(&process->threads[j],
+                            &process->threads[j + 1],
+                            (process->thread_count - j - 1) * sizeof(thread_t));
+                    process->thread_count--;
+
+                    // Si c'était le thread courant, planifier un nouveau
+                    if (i == process_manager.current_process &&
+                        j == process_manager.current_thread) {
+                        schedule();
+                    }
+                    break;
+                }
+            }
+            break;
+        }
     }
 }
 
-void terminate_thread(Thread* thread) {
-    if (!thread) return;
+void set_process_priority(uint32_t process_id, uint32_t priority) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_t* process = &process_manager.processes[i];
+            process->priority = priority;
 
-    thread->is_running = false;
-
-    // Si c'est le thread courant, planifier un nouveau thread
-    if (thread == &pm.processes[pm.current_process].threads[pm.current_thread]) {
-        schedule();
+            // Mettre à jour la priorité de tous les threads
+            for (uint32_t j = 0; j < process->thread_count; j++) {
+                process->threads[j].priority = priority;
+            }
+            break;
+        }
     }
 }
 
-void set_process_priority(Process* process, uint32_t priority) {
-    if (!process) return;
+void set_thread_priority(uint32_t process_id, uint32_t thread_id, uint32_t priority) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_t* process = &process_manager.processes[i];
 
-    process->priority = priority;
-    for (uint32_t i = 0; i < process->thread_count; i++) {
-        process->threads[i].priority = priority;
+            for (uint32_t j = 0; j < process->thread_count; j++) {
+                if (process->threads[j].thread_id == thread_id) {
+                    process->threads[j].priority = priority;
+                    break;
+                }
+            }
+            break;
+        }
     }
 }
 
-void set_thread_priority(Thread* thread, uint32_t priority) {
-    if (!thread) return;
-    thread->priority = priority;
+void sleep_process(uint32_t process_id, uint32_t milliseconds) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_t* process = &process_manager.processes[i];
+            process->is_running = false;
+
+            // Planifier un nouveau processus
+            schedule();
+
+            // Attendre le temps spécifié
+            uint32_t start_time = get_current_time();
+            while (get_current_time() - start_time < milliseconds) {
+                // Attendre
+            }
+
+            process->is_running = true;
+            break;
+        }
+    }
 }
 
-void sleep_process(Process* process, uint32_t milliseconds) {
-    if (!process) return;
-
-    process->is_running = false;
-    // Ajouter le processus à la liste des processus en attente
-    add_to_sleep_queue(process, milliseconds);
-    schedule();
-}
-
-void wake_process(Process* process) {
-    if (!process) return;
-
-    process->is_running = true;
-    schedule();
+void wake_process(uint32_t process_id) {
+    for (uint32_t i = 0; i < process_manager.process_count; i++) {
+        if (process_manager.processes[i].process_id == process_id) {
+            process_manager.processes[i].is_running = true;
+            break;
+        }
+    }
 }
 
 void yield() {
-    // Forcer un changement de contexte
+    // Sauvegarder l'état du thread courant
+    if (process_manager.current_process < process_manager.process_count) {
+        process_t* current_process = &process_manager.processes[process_manager.current_process];
+        if (process_manager.current_thread < current_process->thread_count) {
+            thread_t* current_thread = &current_process->threads[process_manager.current_thread];
+            if (current_thread->is_running) {
+                // Sauvegarder l'état du CPU
+                asm volatile("movl %%eax, %0" : "=m"(current_thread->cpu_state.eax));
+                asm volatile("movl %%ebx, %0" : "=m"(current_thread->cpu_state.ebx));
+                asm volatile("movl %%ecx, %0" : "=m"(current_thread->cpu_state.ecx));
+                asm volatile("movl %%edx, %0" : "=m"(current_thread->cpu_state.edx));
+                asm volatile("movl %%esi, %0" : "=m"(current_thread->cpu_state.esi));
+                asm volatile("movl %%edi, %0" : "=m"(current_thread->cpu_state.edi));
+                asm volatile("movl %%ebp, %0" : "=m"(current_thread->cpu_state.ebp));
+                asm volatile("movl %%esp, %0" : "=m"(current_thread->cpu_state.esp));
+                asm volatile("movl (%%esp), %0" : "=r"(current_thread->cpu_state.eip));
+            }
+        }
+    }
+
+    // Planifier un nouveau thread
     schedule();
-}
-
-void save_cpu_state(CPUState* state) {
-    // Sauvegarder l'état du CPU
-    asm volatile(
-        "movl %%eax, 0(%%edi)\n"
-        "movl %%ebx, 4(%%edi)\n"
-        "movl %%ecx, 8(%%edi)\n"
-        "movl %%edx, 12(%%edi)\n"
-        "movl %%esi, 16(%%edi)\n"
-        "movl %%edi, 20(%%edi)\n"
-        "movl %%ebp, 24(%%edi)\n"
-        "movl %%esp, 28(%%edi)\n"
-        "movl $1f, 32(%%edi)\n"
-        "pushfl\n"
-        "popl 36(%%edi)\n"
-        "movl %%cs, 40(%%edi)\n"
-        "movl %%ds, 44(%%edi)\n"
-        "movl %%es, 48(%%edi)\n"
-        "movl %%fs, 52(%%edi)\n"
-        "movl %%gs, 56(%%edi)\n"
-        "movl %%ss, 60(%%edi)\n"
-        "1:\n"
-        : : "D" (state)
-    );
-}
-
-void load_cpu_state(CPUState* state) {
-    // Charger l'état du CPU
-    asm volatile(
-        "movl 0(%%esi), %%eax\n"
-        "movl 4(%%esi), %%ebx\n"
-        "movl 8(%%esi), %%ecx\n"
-        "movl 12(%%esi), %%edx\n"
-        "movl 16(%%esi), %%esi\n"
-        "movl 20(%%edi), %%edi\n"
-        "movl 24(%%edi), %%ebp\n"
-        "movl 28(%%edi), %%esp\n"
-        "pushl 36(%%edi)\n"
-        "popfl\n"
-        "movl 40(%%edi), %%cs\n"
-        "movl 44(%%edi), %%ds\n"
-        "movl 48(%%edi), %%es\n"
-        "movl 52(%%edi), %%fs\n"
-        "movl 56(%%edi), %%gs\n"
-        "movl 60(%%edi), %%ss\n"
-        "jmp *32(%%edi)\n"
-        : : "S" (state)
-    );
 } 
