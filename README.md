@@ -126,43 +126,13 @@ Ce projet est sous licence MIT. Voir le fichier `LICENSE` pour plus de détails.
   </div>
 </div>
 
-<style>
-  /* Animations */
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  
-  @keyframes slideIn {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-  }
-  
-  /* Appliquer les animations */
-  div {
-    animation: fadeIn 1s ease-in;
-  }
-  
-  h1, h2, h3, h4 {
-    animation: slideIn 0.5s ease-out;
-  }
-  
-  /* Effet de survol sur les cartes */
-  div[style*="background: linear-gradient"] {
-    transition: transform 0.3s ease;
-  }
-  
-  div[style*="background: linear-gradient"]:hover {
-    transform: translateY(-5px);
-  }
-  
-  /* Effet de survol sur les boutons */
-  a[style*="background-color"] {
-    transition: all 0.3s ease;
-  }
-  
-  a[style*="background-color"]:hover {
-    transform: scale(1.05);
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-  }
-</style> 
+<div align="center">
+  <div style="background: linear-gradient(45deg, #ff6b6b, #4ecdc4); padding: 20px; border-radius: 10px; width: 300px; margin: 20px auto;">
+    <h3 style="color: white; margin-bottom: 15px;">✨ Mon Projet Génial</h3>
+    <p style="color: white;">Une description concise et captivante de mon super projet open source.</p>
+    <div style="margin-top: 15px;">
+      <img src="https://img.shields.io/github/stars/username/repo?style=social" alt="GitHub stars"/>
+      <img src="https://img.shields.io/github/forks/username/repo?style=social" alt="GitHub forks"/>
+    </div>
+  </div>
+</div>
