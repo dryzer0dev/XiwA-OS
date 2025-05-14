@@ -1,0 +1,142 @@
+/* Style général */
+* {
+    font-family: 'Segoe UI', 'Ubuntu', sans-serif;
+    color: #ffffff;
+}
+
+window {
+    background-color: #1a1a1a;
+    border-radius: 8px;
+}
+
+/* Barre de titre */
+.titlebar {
+    background: linear-gradient(to right, #2d2d2d, #1a1a1a);
+    padding: 5px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+.titlebar button {
+    background: transparent;
+    border: none;
+    padding: 5px 10px;
+    margin: 0 2px;
+    border-radius: 4px;
+}
+
+.titlebar button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.titlebar button:active {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Barre latérale */
+.sidebar {
+    background-color: #2d2d2d;
+    padding: 10px;
+    min-width: 200px;
+}
+
+.sidebar button {
+    background: transparent;
+    border: none;
+    padding: 10px;
+    margin: 2px 0;
+    border-radius: 6px;
+    width: 100%;
+    text-align: left;
+}
+
+.sidebar button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar button:active {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Barre de menu */
+menubar {
+    background-color: #2d2d2d;
+    padding: 5px;
+}
+
+menubar menuitem {
+    padding: 5px 10px;
+}
+
+menubar menuitem:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Zone principale */
+.main-area {
+    background-color: #1a1a1a;
+    padding: 20px;
+}
+
+/* Barre de statut */
+statusbar {
+    background-color: #2d2d2d;
+    padding: 5px;
+}
+
+/* Effets de survol et de focus */
+button:focus, menuitem:focus {
+    outline: 2px solid #0078d4;
+    outline-offset: -2px;
+}
+
+/* Animations */
+button, menuitem {
+    transition: background-color 0.2s ease;
+}
+
+/* Style des fenêtres */
+.window {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Style des icônes */
+image {
+    color: #ffffff;
+}
+
+/* Style des labels */
+label {
+    color: #ffffff;
+}
+
+/* Style des séparateurs */
+separator {
+    background-color: #404040;
+    margin: 5px 0;
+}
+
+/* Style des menus déroulants */
+menu {
+    background-color: #2d2d2d;
+    border-radius: 4px;
+    padding: 5px;
+}
+
+/* Effet de transparence */
+.window {
+    background-color: rgba(26, 26, 26, 0.95);
+}
+
+/* Style des boutons de la barre de titre */
+.titlebar button#close-button:hover {
+    background-color: #e81123;
+}
+
+.titlebar button#maximize-button:hover {
+    background-color: #0078d4;
+}
+
+.titlebar button#minimize-button:hover {
+    background-color: #0078d4;
+} 
