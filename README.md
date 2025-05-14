@@ -49,7 +49,7 @@ XiwA OS est un système d'exploitation moderne qui repousse les limites de l'inn
 - Des performances optimisées pour les machines modernes
 
 <div align="center">
-  <img src="https://github-readme-stats.vercel.app/api/pin/?username=yourusername&repo=XiwA-OS&theme=radical" alt="Repo Stats"/>
+  <img src="https://github-readme-stats.vercel.app/api/pin/?username=dryzer0dev&repo=XiwA-OS&theme=radical" alt="Repo Stats"/>
 </div>
 
 ## ✨ Fonctionnalités
