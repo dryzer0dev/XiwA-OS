@@ -12,67 +12,63 @@
 #define KERNEL_BASE 0xC0000000
 #define USER_BASE 0x40000000
 
-typedef uint32_t page_directory_t[PAGE_DIRECTORY_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
-typedef uint32_t page_table_t[PAGE_TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+typedef uint32_t page_directory_t[PAGE_DIRECTORY_ENTRIES];
+typedef uint32_t page_table_t[PAGE_TABLE_ENTRIES];
 
 typedef struct {
     page_directory_t* directory;
     page_table_t* tables[PAGE_DIRECTORY_ENTRIES];
-    uint32_t* free_pages;
+    uint32_t free_pages[PAGE_DIRECTORY_ENTRIES];
     uint32_t free_page_count;
 } address_space_t;
 
 address_space_t kernel_space;
-address_space_t* current_space;
+address_space_t* current_space = &kernel_space;
 
 void init_virtual_memory() {
     // Initialiser l'espace d'adressage du noyau
     kernel_space.directory = (page_directory_t*)kmalloc_aligned(sizeof(page_directory_t), PAGE_SIZE);
     memset(kernel_space.directory, 0, sizeof(page_directory_t));
-
-    // Allouer les tables de pages pour le noyau
-    for (uint32_t i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
-        kernel_space.tables[i] = NULL;
-    }
+    memset(kernel_space.tables, 0, sizeof(kernel_space.tables));
+    memset(kernel_space.free_pages, 0, sizeof(kernel_space.free_pages));
+    kernel_space.free_page_count = 0;
 
     // Mapper la mémoire du noyau
-    map_kernel_memory();
+    for (uint32_t i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
+        uint32_t virtual_addr = KERNEL_BASE + (i * PAGE_SIZE * PAGE_TABLE_ENTRIES);
+        uint32_t physical_addr = virtual_addr - KERNEL_BASE;
+
+        page_table_t* table = (page_table_t*)kmalloc_aligned(sizeof(page_table_t), PAGE_SIZE);
+        memset(table, 0, sizeof(page_table_t));
+
+        for (uint32_t j = 0; j < PAGE_TABLE_ENTRIES; j++) {
+            (*table)[j] = (physical_addr + (j * PAGE_SIZE)) | PAGE_PRESENT | PAGE_WRITE;
+        }
+
+        kernel_space.tables[i] = table;
+        kernel_space.directory[i] = ((uint32_t)table) | PAGE_PRESENT | PAGE_WRITE;
+    }
 
     // Mapper la mémoire vidéo
-    map_video_memory();
+    uint32_t video_addr = 0xB8000;
+    uint32_t video_page = video_addr / PAGE_SIZE;
+    uint32_t video_table = video_page / PAGE_TABLE_ENTRIES;
+    uint32_t video_entry = video_page % PAGE_TABLE_ENTRIES;
 
-    // Activer la pagination
-    enable_paging();
-
-    // Définir l'espace d'adressage actuel
-    current_space = &kernel_space;
-}
-
-void map_kernel_memory() {
-    // Mapper les 4 premiers Mo pour le noyau
-    for (uint32_t i = 0; i < 1024; i++) {
-        uint32_t physical_addr = i * PAGE_SIZE;
-        uint32_t virtual_addr = KERNEL_BASE + physical_addr;
-        map_page(&kernel_space, virtual_addr, physical_addr,
-                PAGE_PRESENT | PAGE_WRITE);
+    if (!kernel_space.tables[video_table]) {
+        kernel_space.tables[video_table] = (page_table_t*)kmalloc_aligned(sizeof(page_table_t), PAGE_SIZE);
+        memset(kernel_space.tables[video_table], 0, sizeof(page_table_t));
+        kernel_space.directory[video_table] = ((uint32_t)kernel_space.tables[video_table]) | PAGE_PRESENT | PAGE_WRITE;
     }
-}
 
-void map_video_memory() {
-    // Mapper la mémoire vidéo à 0xB8000
-    map_page(&kernel_space, 0xB8000, 0xB8000,
-            PAGE_PRESENT | PAGE_WRITE);
-}
-
-void enable_paging() {
-    // Charger le répertoire de pages
-    asm volatile("movl %0, %%cr3":: "r"(kernel_space.directory));
+    kernel_space.tables[video_table][video_entry] = video_addr | PAGE_PRESENT | PAGE_WRITE;
 
     // Activer la pagination
+    asm volatile("movl %0, %%cr3" : : "r"(kernel_space.directory));
     uint32_t cr0;
-    asm volatile("movl %%cr0, %0": "=r"(cr0));
+    asm volatile("movl %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000;
-    asm volatile("movl %0, %%cr0":: "r"(cr0));
+    asm volatile("movl %0, %%cr0" : : "r"(cr0));
 }
 
 address_space_t* create_address_space() {
@@ -81,33 +77,23 @@ address_space_t* create_address_space() {
         return NULL;
     }
 
-    // Allouer le répertoire de pages
     space->directory = (page_directory_t*)kmalloc_aligned(sizeof(page_directory_t), PAGE_SIZE);
     if (!space->directory) {
         kfree(space);
         return NULL;
     }
 
-    // Copier les entrées du noyau
-    for (uint32_t i = KERNEL_BASE / PAGE_SIZE / PAGE_TABLE_ENTRIES;
-         i < PAGE_DIRECTORY_ENTRIES; i++) {
-        space->directory[i] = kernel_space.directory[i];
-    }
-
-    // Initialiser les tables de pages
-    for (uint32_t i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
-        space->tables[i] = NULL;
-    }
-
-    // Allouer la table des pages libres
-    space->free_pages = (uint32_t*)kmalloc(PAGE_DIRECTORY_ENTRIES * sizeof(uint32_t));
-    if (!space->free_pages) {
-        kfree(space->directory);
-        kfree(space);
-        return NULL;
-    }
-
+    memset(space->directory, 0, sizeof(page_directory_t));
+    memset(space->tables, 0, sizeof(space->tables));
+    memset(space->free_pages, 0, sizeof(space->free_pages));
     space->free_page_count = 0;
+
+    // Copier les entrées du noyau
+    for (uint32_t i = KERNEL_BASE / (PAGE_SIZE * PAGE_TABLE_ENTRIES); i < PAGE_DIRECTORY_ENTRIES; i++) {
+        space->directory[i] = kernel_space.directory[i];
+        space->tables[i] = kernel_space.tables[i];
+    }
+
     return space;
 }
 
@@ -117,15 +103,13 @@ void destroy_address_space(address_space_t* space) {
     }
 
     // Libérer les tables de pages
-    for (uint32_t i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
-        if (space->tables[i] && i < KERNEL_BASE / PAGE_SIZE / PAGE_TABLE_ENTRIES) {
+    for (uint32_t i = 0; i < KERNEL_BASE / (PAGE_SIZE * PAGE_TABLE_ENTRIES); i++) {
+        if (space->tables[i]) {
             kfree(space->tables[i]);
         }
     }
 
-    // Libérer le répertoire de pages
     kfree(space->directory);
-    kfree(space->free_pages);
     kfree(space);
 }
 
@@ -135,7 +119,7 @@ void switch_address_space(address_space_t* space) {
     }
 
     current_space = space;
-    asm volatile("movl %0, %%cr3":: "r"(space->directory));
+    asm volatile("movl %0, %%cr3" : : "r"(space->directory));
 }
 
 bool map_page(address_space_t* space, uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags) {
@@ -143,25 +127,20 @@ bool map_page(address_space_t* space, uint32_t virtual_addr, uint32_t physical_a
         return false;
     }
 
-    uint32_t directory_index = virtual_addr >> 22;
-    uint32_t table_index = (virtual_addr >> 12) & 0x3FF;
+    uint32_t page = virtual_addr / PAGE_SIZE;
+    uint32_t table = page / PAGE_TABLE_ENTRIES;
+    uint32_t entry = page % PAGE_TABLE_ENTRIES;
 
-    // Vérifier si la table de pages existe
-    if (!space->tables[directory_index]) {
-        // Allouer une nouvelle table de pages
-        space->tables[directory_index] = (page_table_t*)kmalloc_aligned(sizeof(page_table_t), PAGE_SIZE);
-        if (!space->tables[directory_index]) {
+    if (!space->tables[table]) {
+        space->tables[table] = (page_table_t*)kmalloc_aligned(sizeof(page_table_t), PAGE_SIZE);
+        if (!space->tables[table]) {
             return false;
         }
-
-        memset(space->tables[directory_index], 0, sizeof(page_table_t));
-        space->directory[directory_index] = (uint32_t)space->tables[directory_index] | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+        memset(space->tables[table], 0, sizeof(page_table_t));
+        space->directory[table] = ((uint32_t)space->tables[table]) | PAGE_PRESENT | PAGE_WRITE;
     }
 
-    // Mapper la page
-    space->tables[directory_index][table_index] = physical_addr | flags;
-    invalidate_page(virtual_addr);
-
+    space->tables[table][entry] = physical_addr | flags;
     return true;
 }
 
@@ -170,39 +149,99 @@ bool unmap_page(address_space_t* space, uint32_t virtual_addr) {
         return false;
     }
 
-    uint32_t directory_index = virtual_addr >> 22;
-    uint32_t table_index = (virtual_addr >> 12) & 0x3FF;
+    uint32_t page = virtual_addr / PAGE_SIZE;
+    uint32_t table = page / PAGE_TABLE_ENTRIES;
+    uint32_t entry = page % PAGE_TABLE_ENTRIES;
 
-    // Vérifier si la table de pages existe
-    if (!space->tables[directory_index]) {
+    if (!space->tables[table]) {
         return false;
     }
 
-    // Démapper la page
-    space->tables[directory_index][table_index] = 0;
-    invalidate_page(virtual_addr);
+    space->tables[table][entry] = 0;
 
     // Vérifier si la table est vide
-    bool table_empty = true;
+    bool empty = true;
     for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; i++) {
-        if (space->tables[directory_index][i]) {
-            table_empty = false;
+        if (space->tables[table][i]) {
+            empty = false;
             break;
         }
     }
 
-    // Libérer la table si elle est vide
-    if (table_empty && directory_index < KERNEL_BASE / PAGE_SIZE / PAGE_TABLE_ENTRIES) {
-        kfree(space->tables[directory_index]);
-        space->tables[directory_index] = NULL;
-        space->directory[directory_index] = 0;
+    if (empty) {
+        kfree(space->tables[table]);
+        space->tables[table] = NULL;
+        space->directory[table] = 0;
     }
 
     return true;
 }
 
+void* allocate_virtual_page(address_space_t* space, uint32_t flags) {
+    if (!space) {
+        return NULL;
+    }
+
+    // Chercher une page libre
+    for (uint32_t i = 0; i < space->free_page_count; i++) {
+        uint32_t page = space->free_pages[i];
+        uint32_t table = page / PAGE_TABLE_ENTRIES;
+        uint32_t entry = page % PAGE_TABLE_ENTRIES;
+
+        if (!space->tables[table] || !space->tables[table][entry]) {
+            // Allouer une page physique
+            void* physical_page = kmalloc_aligned(PAGE_SIZE, PAGE_SIZE);
+            if (!physical_page) {
+                return NULL;
+            }
+
+            // Mapper la page
+            if (!map_page(space, page * PAGE_SIZE, (uint32_t)physical_page, flags)) {
+                kfree(physical_page);
+                return NULL;
+            }
+
+            // Retirer la page de la liste des pages libres
+            memmove(&space->free_pages[i],
+                    &space->free_pages[i + 1],
+                    (space->free_page_count - i - 1) * sizeof(uint32_t));
+            space->free_page_count--;
+
+            return (void*)(page * PAGE_SIZE);
+        }
+    }
+
+    return NULL;
+}
+
+void free_virtual_page(address_space_t* space, void* virtual_addr) {
+    if (!space || !virtual_addr) {
+        return;
+    }
+
+    uint32_t page = (uint32_t)virtual_addr / PAGE_SIZE;
+    uint32_t table = page / PAGE_TABLE_ENTRIES;
+    uint32_t entry = page % PAGE_TABLE_ENTRIES;
+
+    if (!space->tables[table]) {
+        return;
+    }
+
+    uint32_t physical_addr = space->tables[table][entry] & ~0xFFF;
+    if (physical_addr) {
+        kfree((void*)physical_addr);
+    }
+
+    unmap_page(space, (uint32_t)virtual_addr);
+
+    // Ajouter la page à la liste des pages libres
+    if (space->free_page_count < PAGE_DIRECTORY_ENTRIES) {
+        space->free_pages[space->free_page_count++] = page;
+    }
+}
+
 void invalidate_page(uint32_t virtual_addr) {
-    asm volatile("invlpg (%0)":: "r"(virtual_addr));
+    asm volatile("invlpg (%0)" : : "r"(virtual_addr));
 }
 
 void* kmalloc_aligned(size_t size, size_t alignment) {
