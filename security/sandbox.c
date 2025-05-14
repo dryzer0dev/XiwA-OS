@@ -18,19 +18,16 @@ void create_sandbox_env() {
 void run_in_sandbox(const char *program) {
     printf("Exécution de %s dans le sandbox...\n", program);
     
-    // Création d'un environnement isolé
     if (chroot("/tmp/sandbox") != 0) {
         perror("chroot failed");
         return;
     }
     
-    // Restriction des capacités
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
         perror("prctl failed");
         return;
     }
     
-    // Exécution du programme
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "chroot /tmp/sandbox %s", program);
     system(cmd);
