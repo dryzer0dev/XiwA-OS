@@ -65,6 +65,23 @@ XiMonOS/
 └── build/          # Fichiers de compilation
 ```
 
+## Nouvelle structure de dossiers (inspirée du noyau Linux)
+
+- kernel/ : code principal du noyau
+- lib/ : bibliothèques partagées
+- mm/ : gestion de la mémoire
+- net/ : pile réseau
+- rust/ : code Rust
+- samples/ : exemples et démos
+- scripts/ : scripts utilitaires
+- security/ : sécurité et sandboxing
+- sound/ : gestion du son
+- tools/ : outils de build et de debug
+- usr/ : applications utilisateur
+- virt/ : virtualisation et hyperviseur
+
+Le code est optimisé pour la vitesse, l'esthétique et l'animation, sans commentaires pour plus de clarté visuelle.
+
 ## Développement
 
 Pour ajouter de nouvelles fonctionnalités :
