@@ -127,12 +127,12 @@ Ce projet est sous licence MIT. Voir le fichier `LICENSE` pour plus de détails.
 </div>
 
 <div align="center">
-  <div style="background: linear-gradient(45deg, #ff6b6b, #4ecdc4); padding: 20px; border-radius: 10px; width: 300px; margin: 20px auto;">
-    <h3 style="color: white; margin-bottom: 15px;">✨ Mon Projet Génial</h3>
-    <p style="color: white;">Une description concise et captivante de mon super projet open source.</p>
-    <div style="margin-top: 15px;">
-      <img src="https://img.shields.io/github/stars/username/repo?style=social" alt="GitHub stars"/>
-      <img src="https://img.shields.io/github/forks/username/repo?style=social" alt="GitHub forks"/>
+  <div style="background: linear-gradient(135deg, #FF6B6B, #4ECDC4, #45B7D1); padding: 25px; border-radius: 15px; width: 350px; margin: 30px auto; box-shadow: 0 10px 30px rgba(0,0,0,0.15); backdrop-filter: blur(5px);">
+    <h3 style="color: white; margin-bottom: 20px; font-size: 28px; text-shadow: 2px 2px 4px rgba(0,0,0,0.2);">✨ Mon Projet Génial</h3>
+    <p style="color: white; font-size: 16px; line-height: 1.6; text-shadow: 1px 1px 2px rgba(0,0,0,0.1);">Une description concise et captivante de mon super projet open source.</p>
+    <div style="margin-top: 25px; display: flex; gap: 15px; justify-content: center;">
+      <img src="https://img.shields.io/github/stars/username/repo?style=for-the-badge&color=ff6b6b" alt="GitHub stars"/>
+      <img src="https://img.shields.io/github/forks/dryzer0dev/XiwA-OS?style=for-the-badge&color=4ecdc4" alt="GitHub forks"/>
     </div>
   </div>
 </div>
