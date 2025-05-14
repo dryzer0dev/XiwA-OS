@@ -71,24 +71,21 @@ network_manager_t network_manager;
 
 void init_network_manager() {
     memset(&network_manager, 0, sizeof(network_manager_t));
-    network_manager.next_port = 1024; // Ports dynamiques commencent à 1024
+    network_manager.next_port = 1024;
 }
 
 uint16_t calculate_ip_checksum(ip_header_t* header) {
     uint32_t sum = 0;
     uint16_t* ptr = (uint16_t*)header;
     
-    // Calculer la somme des mots de 16 bits
     for (int i = 0; i < sizeof(ip_header_t) / 2; i++) {
         sum += ntohs(ptr[i]);
     }
     
-    // Ajouter le carry
     while (sum >> 16) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
     
-    // Complément à 1
     return ~sum;
 }
 
@@ -109,22 +106,18 @@ uint16_t calculate_tcp_checksum(tcp_header_t* header, uint8_t* data, uint16_t da
         sum += ntohs(ptr[i]);
     }
     
-    // Données
     for (int i = 0; i < data_length / 2; i++) {
         sum += ntohs(((uint16_t*)data)[i]);
     }
     
-    // Ajouter le dernier octet si la longueur est impaire
     if (data_length % 2) {
         sum += (data[data_length - 1] << 8);
     }
     
-    // Ajouter le carry
     while (sum >> 16) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
     
-    // Complément à 1
     return ~sum;
 }
 
