@@ -2,11 +2,12 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define MAX_SOCKETS 64
-#define MAX_PACKET_SIZE 1514
+#define MAX_SOCKETS 256
+#define MAX_PACKET_SIZE 1500
 #define TCP_PORT_RANGE 65535
 #define TCP_WINDOW_SIZE 65535
 #define TCP_MAX_SEGMENT_SIZE 1460
+#define TCP_TIMEOUT 5000
 
 typedef struct {
     uint8_t version_ihl;
@@ -35,7 +36,7 @@ typedef struct {
 
 typedef struct {
     uint8_t data[MAX_PACKET_SIZE];
-    uint16_t size;
+    uint16_t length;
     uint32_t source_ip;
     uint32_t dest_ip;
     uint16_t source_port;
@@ -43,6 +44,7 @@ typedef struct {
 } packet_t;
 
 typedef struct {
+    uint32_t id;
     uint32_t local_ip;
     uint32_t remote_ip;
     uint16_t local_port;
@@ -57,11 +59,13 @@ typedef struct {
     uint8_t* send_buffer;
     uint16_t send_buffer_size;
     uint16_t send_buffer_used;
+    uint32_t last_activity;
 } tcp_socket_t;
 
 typedef struct {
     tcp_socket_t sockets[MAX_SOCKETS];
     uint32_t socket_count;
+    uint32_t next_socket_id;
     uint32_t local_ip;
     uint32_t netmask;
     uint32_t gateway;
@@ -72,6 +76,7 @@ network_manager_t network_manager;
 
 void init_network_manager() {
     memset(&network_manager, 0, sizeof(network_manager_t));
+    network_manager.next_socket_id = 1;
 }
 
 uint16_t calculate_ip_checksum(ip_header_t* header) {
@@ -93,28 +98,32 @@ uint16_t calculate_ip_checksum(ip_header_t* header) {
     return ~sum;
 }
 
-uint16_t calculate_tcp_checksum(tcp_header_t* header, uint8_t* data, uint16_t data_size) {
+uint16_t calculate_tcp_checksum(tcp_header_t* header, uint8_t* data, uint16_t data_length) {
     uint32_t sum = 0;
-    uint16_t* ptr;
+    uint16_t* ptr = (uint16_t*)header;
+    uint16_t header_size = (header->data_offset >> 4) * 4;
 
-    // Pseudo-en-tête
+    // Pseudo-header
     sum += (network_manager.local_ip >> 16) & 0xFFFF;
     sum += network_manager.local_ip & 0xFFFF;
     sum += (header->dest_port >> 16) & 0xFFFF;
     sum += header->dest_port & 0xFFFF;
-    sum += 6; // TCP
-    sum += sizeof(tcp_header_t) + data_size;
+    sum += header_size + data_length;
+    sum += 6; // TCP protocol
 
-    // En-tête TCP
-    ptr = (uint16_t*)header;
-    for (uint16_t i = 0; i < sizeof(tcp_header_t) / 2; i++) {
+    // TCP header
+    for (uint16_t i = 0; i < header_size / 2; i++) {
         sum += ptr[i];
     }
 
-    // Données
+    // TCP data
     ptr = (uint16_t*)data;
-    for (uint16_t i = 0; i < data_size / 2; i++) {
+    for (uint16_t i = 0; i < data_length / 2; i++) {
         sum += ptr[i];
+    }
+
+    if (data_length % 2) {
+        sum += ((uint16_t)data[data_length - 1]) << 8;
     }
 
     // Ajouter les retenues
@@ -132,6 +141,7 @@ uint32_t create_socket() {
     }
 
     tcp_socket_t* socket = &network_manager.sockets[network_manager.socket_count++];
+    socket->id = network_manager.next_socket_id++;
     socket->local_ip = network_manager.local_ip;
     socket->remote_ip = 0;
     socket->local_port = 0;
@@ -140,135 +150,164 @@ uint32_t create_socket() {
     socket->acknowledgment_number = 0;
     socket->window_size = TCP_WINDOW_SIZE;
     socket->state = 0; // CLOSED
-    socket->receive_buffer = (uint8_t*)kmalloc(TCP_WINDOW_SIZE);
+    socket->receive_buffer = kmalloc(TCP_WINDOW_SIZE);
     socket->receive_buffer_size = TCP_WINDOW_SIZE;
     socket->receive_buffer_used = 0;
-    socket->send_buffer = (uint8_t*)kmalloc(TCP_WINDOW_SIZE);
+    socket->send_buffer = kmalloc(TCP_WINDOW_SIZE);
     socket->send_buffer_size = TCP_WINDOW_SIZE;
     socket->send_buffer_used = 0;
+    socket->last_activity = 0;
 
-    return network_manager.socket_count;
+    return socket->id;
 }
 
 void close_socket(uint32_t socket_id) {
-    if (socket_id >= network_manager.socket_count) {
-        return;
+    for (uint32_t i = 0; i < network_manager.socket_count; i++) {
+        if (network_manager.sockets[i].id == socket_id) {
+            tcp_socket_t* socket = &network_manager.sockets[i];
+
+            if (socket->receive_buffer) {
+                kfree(socket->receive_buffer);
+            }
+            if (socket->send_buffer) {
+                kfree(socket->send_buffer);
+            }
+
+            memmove(&network_manager.sockets[i],
+                    &network_manager.sockets[i + 1],
+                    (network_manager.socket_count - i - 1) * sizeof(tcp_socket_t));
+            network_manager.socket_count--;
+            break;
+        }
     }
-
-    tcp_socket_t* socket = &network_manager.sockets[socket_id - 1];
-    kfree(socket->receive_buffer);
-    kfree(socket->send_buffer);
-
-    // Supprimer le socket
-    memmove(&network_manager.sockets[socket_id - 1],
-            &network_manager.sockets[socket_id],
-            (network_manager.socket_count - socket_id) * sizeof(tcp_socket_t));
-    network_manager.socket_count--;
 }
 
-int send_data(uint32_t socket_id, const void* data, size_t size) {
-    if (socket_id >= network_manager.socket_count) {
-        return -1;
+bool send_data(uint32_t socket_id, const uint8_t* data, uint16_t length) {
+    tcp_socket_t* socket = NULL;
+    for (uint32_t i = 0; i < network_manager.socket_count; i++) {
+        if (network_manager.sockets[i].id == socket_id) {
+            socket = &network_manager.sockets[i];
+            break;
+        }
     }
 
-    tcp_socket_t* socket = &network_manager.sockets[socket_id - 1];
-    if (socket->state != 4) { // ESTABLISHED
-        return -1;
+    if (!socket || socket->state != 1) {
+        return false;
     }
 
     // Vérifier l'espace disponible dans le buffer d'envoi
-    if (socket->send_buffer_used + size > socket->send_buffer_size) {
-        return -1;
+    if (socket->send_buffer_used + length > socket->send_buffer_size) {
+        return false;
     }
 
     // Copier les données dans le buffer d'envoi
-    memcpy(socket->send_buffer + socket->send_buffer_used, data, size);
-    socket->send_buffer_used += size;
+    memcpy(socket->send_buffer + socket->send_buffer_used, data, length);
+    socket->send_buffer_used += length;
 
     // Envoyer les données
-    while (socket->send_buffer_used > 0) {
-        uint16_t segment_size = min(socket->send_buffer_used, TCP_MAX_SEGMENT_SIZE);
-        packet_t packet;
+    uint16_t remaining = socket->send_buffer_used;
+    uint16_t offset = 0;
 
-        // Construire l'en-tête IP
-        ip_header_t* ip_header = (ip_header_t*)packet.data;
-        ip_header->version_ihl = 0x45; // IPv4, 5 mots de 32 bits
-        ip_header->tos = 0;
-        ip_header->total_length = sizeof(ip_header_t) + sizeof(tcp_header_t) + segment_size;
-        ip_header->identification = 0;
-        ip_header->flags_fragment_offset = 0;
-        ip_header->ttl = 64;
-        ip_header->protocol = 6; // TCP
-        ip_header->source_ip = socket->local_ip;
-        ip_header->dest_ip = socket->remote_ip;
-        ip_header->header_checksum = calculate_ip_checksum(ip_header);
+    while (remaining > 0) {
+        uint16_t segment_size = (remaining > TCP_MAX_SEGMENT_SIZE) ? TCP_MAX_SEGMENT_SIZE : remaining;
 
-        // Construire l'en-tête TCP
-        tcp_header_t* tcp_header = (tcp_header_t*)(packet.data + sizeof(ip_header_t));
-        tcp_header->source_port = socket->local_port;
-        tcp_header->dest_port = socket->remote_port;
-        tcp_header->sequence_number = socket->sequence_number;
-        tcp_header->acknowledgment_number = socket->acknowledgment_number;
-        tcp_header->data_offset = sizeof(tcp_header_t) / 4;
-        tcp_header->flags = 0x18; // ACK, PSH
-        tcp_header->window_size = socket->window_size;
-        tcp_header->urgent_pointer = 0;
-        tcp_header->checksum = calculate_tcp_checksum(tcp_header,
-                                                    socket->send_buffer,
-                                                    segment_size);
+        // Créer l'en-tête TCP
+        tcp_header_t tcp_header;
+        tcp_header.source_port = socket->local_port;
+        tcp_header.dest_port = socket->remote_port;
+        tcp_header.sequence_number = socket->sequence_number;
+        tcp_header.acknowledgment_number = socket->acknowledgment_number;
+        tcp_header.data_offset = 5 << 4;
+        tcp_header.flags = 0x18; // ACK, PSH
+        tcp_header.window_size = socket->window_size;
+        tcp_header.urgent_pointer = 0;
 
-        // Copier les données
-        memcpy(packet.data + sizeof(ip_header_t) + sizeof(tcp_header_t),
-               socket->send_buffer,
-               segment_size);
+        // Calculer le checksum
+        tcp_header.checksum = calculate_tcp_checksum(&tcp_header,
+                                                   socket->send_buffer + offset,
+                                                   segment_size);
+
+        // Créer l'en-tête IP
+        ip_header_t ip_header;
+        ip_header.version_ihl = 0x45;
+        ip_header.tos = 0;
+        ip_header.total_length = sizeof(ip_header_t) + sizeof(tcp_header_t) + segment_size;
+        ip_header.identification = 0;
+        ip_header.flags_fragment_offset = 0;
+        ip_header.ttl = 64;
+        ip_header.protocol = 6; // TCP
+        ip_header.source_ip = socket->local_ip;
+        ip_header.dest_ip = socket->remote_ip;
+
+        // Calculer le checksum
+        ip_header.header_checksum = calculate_ip_checksum(&ip_header);
 
         // Envoyer le paquet
-        send_packet(&packet);
+        packet_t packet;
+        memcpy(packet.data, &ip_header, sizeof(ip_header_t));
+        memcpy(packet.data + sizeof(ip_header_t), &tcp_header, sizeof(tcp_header_t));
+        memcpy(packet.data + sizeof(ip_header_t) + sizeof(tcp_header_t),
+               socket->send_buffer + offset,
+               segment_size);
+        packet.length = sizeof(ip_header_t) + sizeof(tcp_header_t) + segment_size;
+        packet.source_ip = socket->local_ip;
+        packet.dest_ip = socket->remote_ip;
+        packet.source_port = socket->local_port;
+        packet.dest_port = socket->remote_port;
+
+        // TODO: Envoyer le paquet via le pilote réseau
 
         // Mettre à jour les compteurs
         socket->sequence_number += segment_size;
-        memmove(socket->send_buffer,
-                socket->send_buffer + segment_size,
-                socket->send_buffer_used - segment_size);
-        socket->send_buffer_used -= segment_size;
+        offset += segment_size;
+        remaining -= segment_size;
     }
 
-    return size;
+    // Vider le buffer d'envoi
+    socket->send_buffer_used = 0;
+    return true;
 }
 
-int receive_data(uint32_t socket_id, void* buffer, size_t size) {
-    if (socket_id >= network_manager.socket_count) {
-        return -1;
+bool receive_data(uint32_t socket_id, uint8_t* data, uint16_t* length) {
+    tcp_socket_t* socket = NULL;
+    for (uint32_t i = 0; i < network_manager.socket_count; i++) {
+        if (network_manager.sockets[i].id == socket_id) {
+            socket = &network_manager.sockets[i];
+            break;
+        }
     }
 
-    tcp_socket_t* socket = &network_manager.sockets[socket_id - 1];
-    if (socket->state != 4) { // ESTABLISHED
-        return -1;
+    if (!socket || socket->state != 1) {
+        return false;
     }
 
-    // Vérifier les données disponibles
+    // Vérifier s'il y a des données disponibles
     if (socket->receive_buffer_used == 0) {
-        return 0;
+        *length = 0;
+        return true;
     }
 
-    // Copier les données
-    size_t bytes_to_copy = min(size, socket->receive_buffer_used);
-    memcpy(buffer, socket->receive_buffer, bytes_to_copy);
+    // Copier les données du buffer de réception
+    uint16_t copy_length = (socket->receive_buffer_used > *length) ? *length : socket->receive_buffer_used;
+    memcpy(data, socket->receive_buffer, copy_length);
+    *length = copy_length;
 
-    // Mettre à jour le buffer
-    memmove(socket->receive_buffer,
-            socket->receive_buffer + bytes_to_copy,
-            socket->receive_buffer_used - bytes_to_copy);
-    socket->receive_buffer_used -= bytes_to_copy;
+    // Déplacer les données restantes
+    if (copy_length < socket->receive_buffer_used) {
+        memmove(socket->receive_buffer,
+                socket->receive_buffer + copy_length,
+                socket->receive_buffer_used - copy_length);
+    }
+    socket->receive_buffer_used -= copy_length;
 
-    return bytes_to_copy;
+    return true;
 }
 
 void handle_tcp_packet(packet_t* packet) {
     ip_header_t* ip_header = (ip_header_t*)packet->data;
     tcp_header_t* tcp_header = (tcp_header_t*)(packet->data + sizeof(ip_header_t));
-    uint8_t* data = packet->data + sizeof(ip_header_t) + sizeof(tcp_header_t);
-    uint16_t data_size = ip_header->total_length - sizeof(ip_header_t) - sizeof(tcp_header_t);
+    uint8_t* tcp_data = packet->data + sizeof(ip_header_t) + sizeof(tcp_header_t);
+    uint16_t tcp_data_length = packet->length - sizeof(ip_header_t) - sizeof(tcp_header_t);
 
     // Trouver le socket correspondant
     tcp_socket_t* socket = NULL;
@@ -294,10 +333,10 @@ void handle_tcp_packet(packet_t* packet) {
             socket->acknowledgment_number = tcp_header->sequence_number + 1;
             socket->window_size = TCP_WINDOW_SIZE;
             socket->state = 1; // LISTEN
-            socket->receive_buffer = (uint8_t*)kmalloc(TCP_WINDOW_SIZE);
+            socket->receive_buffer = kmalloc(TCP_WINDOW_SIZE);
             socket->receive_buffer_size = TCP_WINDOW_SIZE;
             socket->receive_buffer_used = 0;
-            socket->send_buffer = (uint8_t*)kmalloc(TCP_WINDOW_SIZE);
+            socket->send_buffer = kmalloc(TCP_WINDOW_SIZE);
             socket->send_buffer_size = TCP_WINDOW_SIZE;
             socket->send_buffer_used = 0;
 
@@ -348,14 +387,14 @@ void handle_tcp_packet(packet_t* packet) {
     }
 
     // Traiter les données
-    if (data_size > 0 && socket->state == 4) { // ESTABLISHED
+    if (tcp_data_length > 0 && socket->state == 4) { // ESTABLISHED
         // Vérifier l'espace disponible dans le buffer de réception
-        if (socket->receive_buffer_used + data_size <= socket->receive_buffer_size) {
+        if (socket->receive_buffer_used + tcp_data_length <= socket->receive_buffer_size) {
             memcpy(socket->receive_buffer + socket->receive_buffer_used,
-                   data,
-                   data_size);
-            socket->receive_buffer_used += data_size;
-            socket->acknowledgment_number += data_size;
+                   tcp_data,
+                   tcp_data_length);
+            socket->receive_buffer_used += tcp_data_length;
+            socket->acknowledgment_number += tcp_data_length;
         }
 
         // Envoyer ACK
@@ -394,5 +433,5 @@ void send_packet(packet_t* packet) {
     if (!device) return;
 
     // Envoyer le paquet
-    write_device(device, packet->data, packet->size, 0);
+    write_device(device, packet->data, packet->length, 0);
 } 

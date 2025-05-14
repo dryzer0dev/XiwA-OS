@@ -4,187 +4,210 @@
 
 #define MAX_FILENAME_LENGTH 255
 #define MAX_PATH_LENGTH 4096
-#define MAX_OPEN_FILES 256
-#define MAX_MOUNT_POINTS 16
+#define MAX_FILES_PER_DIR 1024
 #define BLOCK_SIZE 4096
 #define INODE_SIZE 256
-#define MAX_BLOCKS_PER_FILE 1024
-#define MAX_DIRECT_BLOCKS 12
-#define MAX_INDIRECT_BLOCKS 256
+#define MAX_BLOCKS_PER_INODE 12
+#define MAX_INDIRECT_BLOCKS 1024
 
 typedef struct {
-    uint32_t inode_number;
     uint32_t mode;
     uint32_t uid;
     uint32_t gid;
     uint32_t size;
+    uint32_t atime;
+    uint32_t mtime;
+    uint32_t ctime;
     uint32_t blocks;
-    uint32_t direct_blocks[MAX_DIRECT_BLOCKS];
-    uint32_t indirect_block;
-    uint32_t double_indirect_block;
-    uint32_t triple_indirect_block;
-    uint32_t creation_time;
-    uint32_t modification_time;
-    uint32_t access_time;
+    uint32_t flags;
+    uint32_t osd1;
+    uint32_t block[15];
+    uint32_t generation;
+    uint32_t file_acl;
+    uint32_t dir_acl;
+    uint32_t faddr;
+    uint16_t i_extra_isize;
+    uint16_t i_checksum_hi;
+    uint32_t i_ctime_extra;
+    uint32_t i_mtime_extra;
+    uint32_t i_atime_extra;
+    uint32_t i_crtime;
+    uint32_t i_crtime_extra;
+    uint32_t i_version_hi;
+    uint32_t i_projid;
 } inode_t;
 
 typedef struct {
+    uint32_t inode;
+    uint16_t rec_len;
+    uint8_t name_len;
+    uint8_t file_type;
     char name[MAX_FILENAME_LENGTH];
-    uint32_t inode_number;
 } directory_entry_t;
 
 typedef struct {
     uint32_t magic;
-    uint32_t block_size;
-    uint32_t inode_size;
-    uint32_t blocks_per_group;
-    uint32_t inodes_per_group;
-    uint32_t total_blocks;
-    uint32_t total_inodes;
+    uint32_t inode_count;
+    uint32_t block_count;
+    uint32_t reserved_blocks;
     uint32_t free_blocks;
     uint32_t free_inodes;
     uint32_t first_data_block;
-    uint32_t state;
-    uint32_t error_behavior;
+    uint32_t log_block_size;
+    uint32_t blocks_per_group;
+    uint32_t inodes_per_group;
+    uint32_t mount_time;
+    uint32_t write_time;
+    uint16_t mount_count;
+    uint16_t max_mount_count;
+    uint16_t magic_signature;
+    uint16_t file_system_state;
+    uint16_t error_behavior;
+    uint16_t minor_revision_level;
     uint32_t last_check_time;
     uint32_t check_interval;
     uint32_t creator_os;
     uint32_t revision_level;
-    uint32_t reserved[235];
+    uint16_t default_reserved_uid;
+    uint16_t default_reserved_gid;
 } superblock_t;
 
 typedef struct {
     uint32_t block_bitmap;
     uint32_t inode_bitmap;
     uint32_t inode_table;
-    uint16_t free_blocks;
-    uint16_t free_inodes;
-    uint16_t used_dirs;
-    uint16_t reserved;
-    uint32_t reserved2[3];
+    uint16_t free_blocks_count;
+    uint16_t free_inodes_count;
+    uint16_t used_dirs_count;
+    uint16_t pad;
+    uint32_t reserved[3];
 } group_descriptor_t;
 
 typedef struct {
-    char name[MAX_FILENAME_LENGTH];
-    uint32_t inode_number;
-    uint32_t mode;
-    uint32_t size;
+    int fd;
+    uint32_t inode;
     uint32_t position;
-    bool is_open;
+    uint32_t flags;
 } file_handle_t;
 
 typedef struct {
-    char mount_point[MAX_PATH_LENGTH];
-    uint32_t device_id;
+    char path[MAX_PATH_LENGTH];
+    uint32_t device;
+    uint32_t flags;
     superblock_t* superblock;
     group_descriptor_t* group_descriptors;
-    inode_t* inode_table;
-    uint8_t* block_bitmap;
-    uint8_t* inode_bitmap;
+    inode_t* inodes;
+    uint32_t* block_bitmap;
+    uint32_t* inode_bitmap;
 } mount_point_t;
 
 typedef struct {
-    mount_point_t mount_points[MAX_MOUNT_POINTS];
+    mount_point_t* mount_points;
     uint32_t mount_point_count;
-    file_handle_t open_files[MAX_OPEN_FILES];
-    uint32_t open_file_count;
-    uint32_t current_directory_inode;
+    file_handle_t* file_handles;
+    uint32_t file_handle_count;
 } file_system_t;
 
 file_system_t file_system;
 
 void init_file_system() {
     memset(&file_system, 0, sizeof(file_system_t));
-    file_system.current_directory_inode = 1; // Inode racine
 }
 
-bool mount_file_system(const char* mount_point, uint32_t device_id) {
-    if (file_system.mount_point_count >= MAX_MOUNT_POINTS) {
+bool mount_file_system(const char* path, uint32_t device) {
+    if (file_system.mount_point_count >= 16) {
         return false;
     }
 
-    mount_point_t* mp = &file_system.mount_points[file_system.mount_point_count++];
-    strncpy(mp->mount_point, mount_point, MAX_PATH_LENGTH - 1);
-    mp->mount_point[MAX_PATH_LENGTH - 1] = '\0';
-    mp->device_id = device_id;
+    mount_point_t* mount = &file_system.mount_points[file_system.mount_point_count++];
+    strncpy(mount->path, path, sizeof(mount->path) - 1);
+    mount->device = device;
+    mount->flags = 0;
 
     // Lire le superblock
-    device_t* device = find_device_by_id(device_id);
-    if (!device) return false;
-
-    mp->superblock = (superblock_t*)kmalloc(sizeof(superblock_t));
-    if (!mp->superblock) return false;
-
-    read_device(device, mp->superblock, sizeof(superblock_t));
-
-    // Vérifier la signature du système de fichiers
-    if (mp->superblock->magic != 0xEF53) { // ext4 signature
-        kfree(mp->superblock);
+    mount->superblock = (superblock_t*)kmalloc(sizeof(superblock_t));
+    if (!mount->superblock) {
+        file_system.mount_point_count--;
         return false;
     }
 
-    // Allouer et lire les descripteurs de groupe
-    uint32_t group_count = (mp->superblock->total_blocks + mp->superblock->blocks_per_group - 1) /
-                          mp->superblock->blocks_per_group;
-    mp->group_descriptors = (group_descriptor_t*)kmalloc(sizeof(group_descriptor_t) * group_count);
-    if (!mp->group_descriptors) {
-        kfree(mp->superblock);
+    // Lire le superblock depuis le périphérique
+    device_t* dev = find_device_by_id(device);
+    if (!dev) {
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
         return false;
     }
 
-    read_device(device, mp->group_descriptors,
-                sizeof(group_descriptor_t) * group_count);
-
-    // Allouer et lire la table d'inodes
-    mp->inode_table = (inode_t*)kmalloc(sizeof(inode_t) * mp->superblock->total_inodes);
-    if (!mp->inode_table) {
-        kfree(mp->group_descriptors);
-        kfree(mp->superblock);
+    if (read_device(dev, mount->superblock, sizeof(superblock_t), 1024) != sizeof(superblock_t)) {
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
         return false;
     }
 
-    read_device(device, mp->inode_table,
-                sizeof(inode_t) * mp->superblock->total_inodes);
-
-    // Allouer et lire les bitmaps
-    uint32_t bitmap_size = (mp->superblock->blocks_per_group + 7) / 8;
-    mp->block_bitmap = (uint8_t*)kmalloc(bitmap_size);
-    mp->inode_bitmap = (uint8_t*)kmalloc(bitmap_size);
-    if (!mp->block_bitmap || !mp->inode_bitmap) {
-        kfree(mp->inode_table);
-        kfree(mp->group_descriptors);
-        kfree(mp->superblock);
+    // Vérifier la signature magique
+    if (mount->superblock->magic != 0xEF53) {
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
         return false;
     }
 
-    read_device(device, mp->block_bitmap, bitmap_size);
-    read_device(device, mp->inode_bitmap, bitmap_size);
+    // Allouer les descripteurs de groupe
+    uint32_t group_count = (mount->superblock->block_count + mount->superblock->blocks_per_group - 1) /
+                          mount->superblock->blocks_per_group;
+    mount->group_descriptors = (group_descriptor_t*)kmalloc(sizeof(group_descriptor_t) * group_count);
+    if (!mount->group_descriptors) {
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
+        return false;
+    }
+
+    // Lire les descripteurs de groupe
+    if (read_device(dev, mount->group_descriptors,
+                   sizeof(group_descriptor_t) * group_count,
+                   1024 + sizeof(superblock_t)) != sizeof(group_descriptor_t) * group_count) {
+        kfree(mount->group_descriptors);
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
+        return false;
+    }
+
+    // Allouer les inodes
+    mount->inodes = (inode_t*)kmalloc(sizeof(inode_t) * mount->superblock->inode_count);
+    if (!mount->inodes) {
+        kfree(mount->group_descriptors);
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
+        return false;
+    }
+
+    // Allouer les bitmaps
+    uint32_t block_bitmap_size = (mount->superblock->block_count + 31) / 32;
+    uint32_t inode_bitmap_size = (mount->superblock->inode_count + 31) / 32;
+    mount->block_bitmap = (uint32_t*)kmalloc(block_bitmap_size * sizeof(uint32_t));
+    mount->inode_bitmap = (uint32_t*)kmalloc(inode_bitmap_size * sizeof(uint32_t));
+    if (!mount->block_bitmap || !mount->inode_bitmap) {
+        kfree(mount->inodes);
+        kfree(mount->group_descriptors);
+        kfree(mount->superblock);
+        file_system.mount_point_count--;
+        return false;
+    }
 
     return true;
 }
 
-void unmount_file_system(const char* mount_point) {
+void unmount_file_system(const char* path) {
     for (uint32_t i = 0; i < file_system.mount_point_count; i++) {
-        if (strcmp(file_system.mount_points[i].mount_point, mount_point) == 0) {
-            mount_point_t* mp = &file_system.mount_points[i];
+        if (strcmp(file_system.mount_points[i].path, path) == 0) {
+            mount_point_t* mount = &file_system.mount_points[i];
 
-            // Écrire les modifications sur le disque
-            device_t* device = find_device_by_id(mp->device_id);
-            if (device) {
-                write_device(device, mp->superblock, sizeof(superblock_t));
-                write_device(device, mp->group_descriptors,
-                           sizeof(group_descriptor_t) * mp->superblock->total_blocks /
-                           mp->superblock->blocks_per_group);
-                write_device(device, mp->inode_table,
-                           sizeof(inode_t) * mp->superblock->total_inodes);
-            }
-
-            // Libérer la mémoire
-            kfree(mp->block_bitmap);
-            kfree(mp->inode_bitmap);
-            kfree(mp->inode_table);
-            kfree(mp->group_descriptors);
-            kfree(mp->superblock);
+            // Libérer les ressources
+            kfree(mount->inode_bitmap);
+            kfree(mount->block_bitmap);
+            kfree(mount->inodes);
+            kfree(mount->group_descriptors);
+            kfree(mount->superblock);
 
             // Supprimer le point de montage
             memmove(&file_system.mount_points[i],
@@ -196,301 +219,368 @@ void unmount_file_system(const char* mount_point) {
     }
 }
 
-file_handle_t* open_file(const char* path, uint32_t mode) {
-    if (file_system.open_file_count >= MAX_OPEN_FILES) {
-        return NULL;
+int open_file(const char* path, uint32_t flags) {
+    if (file_system.file_handle_count >= 256) {
+        return -1;
     }
 
     // Trouver le point de montage
-    mount_point_t* mp = NULL;
-    const char* relative_path = path;
+    mount_point_t* mount = NULL;
     for (uint32_t i = 0; i < file_system.mount_point_count; i++) {
-        if (strncmp(path, file_system.mount_points[i].mount_point,
-                   strlen(file_system.mount_points[i].mount_point)) == 0) {
-            mp = &file_system.mount_points[i];
-            relative_path = path + strlen(mp->mount_point);
+        if (strncmp(path, file_system.mount_points[i].path,
+                   strlen(file_system.mount_points[i].path)) == 0) {
+            mount = &file_system.mount_points[i];
             break;
         }
     }
 
-    if (!mp) return NULL;
+    if (!mount) {
+        return -1;
+    }
 
-    // Trouver l'inode du fichier
-    uint32_t inode_number = find_inode_by_path(mp, relative_path);
-    if (inode_number == 0) return NULL;
+    // Trouver l'inode
+    uint32_t inode = find_inode_by_path(mount, path + strlen(mount->path));
+    if (!inode) {
+        return -1;
+    }
 
-    inode_t* inode = &mp->inode_table[inode_number - 1];
-
-    // Créer le handle de fichier
-    file_handle_t* handle = &file_system.open_files[file_system.open_file_count++];
-    strncpy(handle->name, path, MAX_FILENAME_LENGTH - 1);
-    handle->name[MAX_FILENAME_LENGTH - 1] = '\0';
-    handle->inode_number = inode_number;
-    handle->mode = mode;
-    handle->size = inode->size;
+    // Créer un nouveau descripteur de fichier
+    file_handle_t* handle = &file_system.file_handles[file_system.file_handle_count++];
+    handle->fd = file_system.file_handle_count;
+    handle->inode = inode;
     handle->position = 0;
-    handle->is_open = true;
+    handle->flags = flags;
 
-    return handle;
+    return handle->fd;
 }
 
-void close_file(file_handle_t* handle) {
-    if (!handle || !handle->is_open) return;
-
-    handle->is_open = false;
-
-    // Trouver et supprimer le handle
-    for (uint32_t i = 0; i < file_system.open_file_count; i++) {
-        if (&file_system.open_files[i] == handle) {
-            memmove(&file_system.open_files[i],
-                    &file_system.open_files[i + 1],
-                    (file_system.open_file_count - i - 1) * sizeof(file_handle_t));
-            file_system.open_file_count--;
-            break;
-        }
+void close_file(int fd) {
+    if (fd <= 0 || fd > file_system.file_handle_count) {
+        return;
     }
+
+    // Supprimer le descripteur de fichier
+    memmove(&file_system.file_handles[fd - 1],
+            &file_system.file_handles[fd],
+            (file_system.file_handle_count - fd) * sizeof(file_handle_t));
+    file_system.file_handle_count--;
 }
 
-int read_file(file_handle_t* handle, void* buffer, size_t size) {
-    if (!handle || !handle->is_open || !buffer) return -1;
+int read_file(int fd, void* buffer, size_t size) {
+    if (fd <= 0 || fd > file_system.file_handle_count || !buffer) {
+        return -1;
+    }
+
+    file_handle_t* handle = &file_system.file_handles[fd - 1];
+    mount_point_t* mount = NULL;
 
     // Trouver le point de montage
-    mount_point_t* mp = find_mount_point_by_path(handle->name);
-    if (!mp) return -1;
+    for (uint32_t i = 0; i < file_system.mount_point_count; i++) {
+        if (file_system.mount_points[i].inodes[handle->inode - 1].block[0]) {
+            mount = &file_system.mount_points[i];
+            break;
+        }
+    }
 
-    inode_t* inode = &mp->inode_table[handle->inode_number - 1];
-    if (handle->position >= inode->size) return 0;
+    if (!mount) {
+        return -1;
+    }
+
+    inode_t* inode = &mount->inodes[handle->inode - 1];
+    if (handle->position >= inode->size) {
+        return 0;
+    }
 
     size_t bytes_to_read = min(size, inode->size - handle->position);
     size_t bytes_read = 0;
 
     while (bytes_read < bytes_to_read) {
-        uint32_t block_number = get_block_number(inode, handle->position + bytes_read);
-        if (block_number == 0) break;
+        uint32_t block_index = handle->position / BLOCK_SIZE;
+        uint32_t block_offset = handle->position % BLOCK_SIZE;
+        uint32_t block_number = get_block_number(mount, inode, block_index);
 
-        size_t block_offset = (handle->position + bytes_read) % BLOCK_SIZE;
-        size_t bytes_in_block = min(BLOCK_SIZE - block_offset,
-                                  bytes_to_read - bytes_read);
+        if (!block_number) {
+            break;
+        }
 
-        device_t* device = find_device_by_id(mp->device_id);
-        if (!device) break;
+        size_t bytes_in_block = min(bytes_to_read - bytes_read, BLOCK_SIZE - block_offset);
+        device_t* dev = find_device_by_id(mount->device);
+        if (!dev) {
+            break;
+        }
 
-        uint8_t block_buffer[BLOCK_SIZE];
-        read_device(device, block_buffer, BLOCK_SIZE);
-
-        memcpy((uint8_t*)buffer + bytes_read,
-               block_buffer + block_offset,
-               bytes_in_block);
+        if (read_device(dev, (uint8_t*)buffer + bytes_read,
+                       bytes_in_block,
+                       block_number * BLOCK_SIZE + block_offset) != bytes_in_block) {
+            break;
+        }
 
         bytes_read += bytes_in_block;
+        handle->position += bytes_in_block;
     }
 
-    handle->position += bytes_read;
     return bytes_read;
 }
 
-int write_file(file_handle_t* handle, const void* buffer, size_t size) {
-    if (!handle || !handle->is_open || !buffer) return -1;
+int write_file(int fd, const void* buffer, size_t size) {
+    if (fd <= 0 || fd > file_system.file_handle_count || !buffer) {
+        return -1;
+    }
+
+    file_handle_t* handle = &file_system.file_handles[fd - 1];
+    mount_point_t* mount = NULL;
 
     // Trouver le point de montage
-    mount_point_t* mp = find_mount_point_by_path(handle->name);
-    if (!mp) return -1;
+    for (uint32_t i = 0; i < file_system.mount_point_count; i++) {
+        if (file_system.mount_points[i].inodes[handle->inode - 1].block[0]) {
+            mount = &file_system.mount_points[i];
+            break;
+        }
+    }
 
-    inode_t* inode = &mp->inode_table[handle->inode_number - 1];
+    if (!mount) {
+        return -1;
+    }
+
+    inode_t* inode = &mount->inodes[handle->inode - 1];
     size_t bytes_written = 0;
 
     while (bytes_written < size) {
-        uint32_t block_number = get_block_number(inode, handle->position + bytes_written);
-        if (block_number == 0) {
+        uint32_t block_index = handle->position / BLOCK_SIZE;
+        uint32_t block_offset = handle->position % BLOCK_SIZE;
+        uint32_t block_number = get_block_number(mount, inode, block_index);
+
+        if (!block_number) {
             // Allouer un nouveau bloc
-            block_number = allocate_block(mp);
-            if (block_number == 0) break;
+            block_number = allocate_block(mount);
+            if (!block_number) {
+                break;
+            }
 
-            set_block_number(inode, handle->position + bytes_written, block_number);
+            if (!set_block_number(mount, inode, block_index, block_number)) {
+                free_block(mount, block_number);
+                break;
+            }
         }
 
-        size_t block_offset = (handle->position + bytes_written) % BLOCK_SIZE;
-        size_t bytes_in_block = min(BLOCK_SIZE - block_offset,
-                                  size - bytes_written);
-
-        device_t* device = find_device_by_id(mp->device_id);
-        if (!device) break;
-
-        uint8_t block_buffer[BLOCK_SIZE];
-        if (block_offset > 0 || bytes_in_block < BLOCK_SIZE) {
-            read_device(device, block_buffer, BLOCK_SIZE);
+        size_t bytes_in_block = min(size - bytes_written, BLOCK_SIZE - block_offset);
+        device_t* dev = find_device_by_id(mount->device);
+        if (!dev) {
+            break;
         }
 
-        memcpy(block_buffer + block_offset,
-               (uint8_t*)buffer + bytes_written,
-               bytes_in_block);
-
-        write_device(device, block_buffer, BLOCK_SIZE);
+        if (write_device(dev, (uint8_t*)buffer + bytes_written,
+                        bytes_in_block,
+                        block_number * BLOCK_SIZE + block_offset) != bytes_in_block) {
+            break;
+        }
 
         bytes_written += bytes_in_block;
-    }
+        handle->position += bytes_in_block;
 
-    handle->position += bytes_written;
-    if (handle->position > inode->size) {
-        inode->size = handle->position;
-        inode->modification_time = get_current_time();
+        if (handle->position > inode->size) {
+            inode->size = handle->position;
+        }
     }
 
     return bytes_written;
 }
 
-uint32_t find_inode_by_path(mount_point_t* mp, const char* path) {
-    if (!path || path[0] != '/') return 0;
+uint32_t find_inode_by_path(mount_point_t* mount, const char* path) {
+    if (!path || path[0] != '/') {
+        return 0;
+    }
 
-    uint32_t current_inode = 1; // Inode racine
+    uint32_t current_inode = 2; // Inode racine
     char* path_copy = strdup(path);
-    char* component = strtok(path_copy, "/");
+    char* token = strtok(path_copy, "/");
 
-    while (component) {
-        inode_t* inode = &mp->inode_table[current_inode - 1];
-        if (!(inode->mode & 0x4000)) { // Vérifier si c'est un répertoire
-            free(path_copy);
+    while (token) {
+        bool found = false;
+        inode_t* inode = &mount->inodes[current_inode - 1];
+
+        // Lire le répertoire
+        uint8_t* buffer = (uint8_t*)kmalloc(BLOCK_SIZE);
+        if (!buffer) {
+            kfree(path_copy);
             return 0;
         }
 
-        bool found = false;
-        uint32_t block_number = 0;
-        uint32_t block_offset = 0;
+        for (uint32_t i = 0; i < MAX_BLOCKS_PER_INODE; i++) {
+            if (!inode->block[i]) {
+                continue;
+            }
 
-        while (get_next_block(inode, &block_number, &block_offset)) {
-            device_t* device = find_device_by_id(mp->device_id);
-            if (!device) continue;
+            device_t* dev = find_device_by_id(mount->device);
+            if (!dev) {
+                kfree(buffer);
+                kfree(path_copy);
+                return 0;
+            }
 
-            uint8_t block_buffer[BLOCK_SIZE];
-            read_device(device, block_buffer, BLOCK_SIZE);
+            if (read_device(dev, buffer, BLOCK_SIZE,
+                           inode->block[i] * BLOCK_SIZE) != BLOCK_SIZE) {
+                kfree(buffer);
+                kfree(path_copy);
+                return 0;
+            }
 
-            directory_entry_t* entry = (directory_entry_t*)block_buffer;
-            while ((uint8_t*)entry < block_buffer + BLOCK_SIZE) {
-                if (entry->inode_number != 0 &&
-                    strcmp(entry->name, component) == 0) {
-                    current_inode = entry->inode_number;
+            directory_entry_t* entry = (directory_entry_t*)buffer;
+            while ((uint8_t*)entry < buffer + BLOCK_SIZE) {
+                if (entry->inode && strncmp(entry->name, token, entry->name_len) == 0) {
+                    current_inode = entry->inode;
                     found = true;
                     break;
                 }
-                entry = (directory_entry_t*)((uint8_t*)entry + entry->name_length + 8);
+                entry = (directory_entry_t*)((uint8_t*)entry + entry->rec_len);
             }
 
-            if (found) break;
+            if (found) {
+                break;
+            }
         }
 
+        kfree(buffer);
         if (!found) {
-            free(path_copy);
+            kfree(path_copy);
             return 0;
         }
 
-        component = strtok(NULL, "/");
+        token = strtok(NULL, "/");
     }
 
-    free(path_copy);
+    kfree(path_copy);
     return current_inode;
 }
 
-uint32_t get_block_number(inode_t* inode, uint32_t offset) {
-    uint32_t block_index = offset / BLOCK_SIZE;
-
-    if (block_index < MAX_DIRECT_BLOCKS) {
-        return inode->direct_blocks[block_index];
+uint32_t get_block_number(mount_point_t* mount, inode_t* inode, uint32_t block_index) {
+    if (block_index < MAX_BLOCKS_PER_INODE) {
+        return inode->block[block_index];
     }
 
-    block_index -= MAX_DIRECT_BLOCKS;
+    block_index -= MAX_BLOCKS_PER_INODE;
     if (block_index < MAX_INDIRECT_BLOCKS) {
-        uint32_t indirect_block[BLOCK_SIZE / 4];
-        device_t* device = find_device_by_id(current_device_id);
-        if (!device) return 0;
+        uint32_t* indirect_blocks = (uint32_t*)kmalloc(BLOCK_SIZE);
+        if (!indirect_blocks) {
+            return 0;
+        }
 
-        read_device(device, indirect_block, BLOCK_SIZE);
-        return indirect_block[block_index];
-    }
+        device_t* dev = find_device_by_id(mount->device);
+        if (!dev) {
+            kfree(indirect_blocks);
+            return 0;
+        }
 
-    block_index -= MAX_INDIRECT_BLOCKS;
-    if (block_index < MAX_INDIRECT_BLOCKS * MAX_INDIRECT_BLOCKS) {
-        uint32_t double_indirect_block[BLOCK_SIZE / 4];
-        uint32_t indirect_block[BLOCK_SIZE / 4];
-        device_t* device = find_device_by_id(current_device_id);
-        if (!device) return 0;
+        if (read_device(dev, indirect_blocks, BLOCK_SIZE,
+                       inode->block[12] * BLOCK_SIZE) != BLOCK_SIZE) {
+            kfree(indirect_blocks);
+            return 0;
+        }
 
-        read_device(device, double_indirect_block, BLOCK_SIZE);
-        read_device(device, indirect_block, BLOCK_SIZE);
-        return indirect_block[block_index / MAX_INDIRECT_BLOCKS];
+        uint32_t block_number = indirect_blocks[block_index];
+        kfree(indirect_blocks);
+        return block_number;
     }
 
     return 0;
 }
 
-void set_block_number(inode_t* inode, uint32_t offset, uint32_t block_number) {
-    uint32_t block_index = offset / BLOCK_SIZE;
-
-    if (block_index < MAX_DIRECT_BLOCKS) {
-        inode->direct_blocks[block_index] = block_number;
-        return;
+bool set_block_number(mount_point_t* mount, inode_t* inode, uint32_t block_index, uint32_t block_number) {
+    if (block_index < MAX_BLOCKS_PER_INODE) {
+        inode->block[block_index] = block_number;
+        return true;
     }
 
-    block_index -= MAX_DIRECT_BLOCKS;
+    block_index -= MAX_BLOCKS_PER_INODE;
     if (block_index < MAX_INDIRECT_BLOCKS) {
-        if (inode->indirect_block == 0) {
-            inode->indirect_block = allocate_block(current_mount_point);
-        }
-
-        uint32_t indirect_block[BLOCK_SIZE / 4];
-        device_t* device = find_device_by_id(current_device_id);
-        if (!device) return;
-
-        read_device(device, indirect_block, BLOCK_SIZE);
-        indirect_block[block_index] = block_number;
-        write_device(device, indirect_block, BLOCK_SIZE);
-        return;
-    }
-
-    block_index -= MAX_INDIRECT_BLOCKS;
-    if (block_index < MAX_INDIRECT_BLOCKS * MAX_INDIRECT_BLOCKS) {
-        if (inode->double_indirect_block == 0) {
-            inode->double_indirect_block = allocate_block(current_mount_point);
-        }
-
-        uint32_t double_indirect_block[BLOCK_SIZE / 4];
-        uint32_t indirect_block[BLOCK_SIZE / 4];
-        device_t* device = find_device_by_id(current_device_id);
-        if (!device) return;
-
-        read_device(device, double_indirect_block, BLOCK_SIZE);
-        if (double_indirect_block[block_index / MAX_INDIRECT_BLOCKS] == 0) {
-            double_indirect_block[block_index / MAX_INDIRECT_BLOCKS] = allocate_block(current_mount_point);
-            write_device(device, double_indirect_block, BLOCK_SIZE);
-        }
-
-        read_device(device, indirect_block, BLOCK_SIZE);
-        indirect_block[block_index % MAX_INDIRECT_BLOCKS] = block_number;
-        write_device(device, indirect_block, BLOCK_SIZE);
-    }
-}
-
-uint32_t allocate_block(mount_point_t* mp) {
-    for (uint32_t group = 0; group < mp->superblock->total_blocks / mp->superblock->blocks_per_group; group++) {
-        group_descriptor_t* gd = &mp->group_descriptors[group];
-        if (gd->free_blocks == 0) continue;
-
-        for (uint32_t i = 0; i < mp->superblock->blocks_per_group; i++) {
-            if (!(mp->block_bitmap[group * mp->superblock->blocks_per_group / 8 + i / 8] & (1 << (i % 8)))) {
-                mp->block_bitmap[group * mp->superblock->blocks_per_group / 8 + i / 8] |= (1 << (i % 8));
-                gd->free_blocks--;
-                mp->superblock->free_blocks--;
-                return group * mp->superblock->blocks_per_group + i + mp->superblock->first_data_block;
+        if (!inode->block[12]) {
+            inode->block[12] = allocate_block(mount);
+            if (!inode->block[12]) {
+                return false;
             }
         }
+
+        uint32_t* indirect_blocks = (uint32_t*)kmalloc(BLOCK_SIZE);
+        if (!indirect_blocks) {
+            return false;
+        }
+
+        device_t* dev = find_device_by_id(mount->device);
+        if (!dev) {
+            kfree(indirect_blocks);
+            return false;
+        }
+
+        if (read_device(dev, indirect_blocks, BLOCK_SIZE,
+                       inode->block[12] * BLOCK_SIZE) != BLOCK_SIZE) {
+            kfree(indirect_blocks);
+            return false;
+        }
+
+        indirect_blocks[block_index] = block_number;
+
+        if (write_device(dev, indirect_blocks, BLOCK_SIZE,
+                        inode->block[12] * BLOCK_SIZE) != BLOCK_SIZE) {
+            kfree(indirect_blocks);
+            return false;
+        }
+
+        kfree(indirect_blocks);
+        return true;
     }
+
+    return false;
+}
+
+uint32_t allocate_block(mount_point_t* mount) {
+    for (uint32_t i = 0; i < mount->superblock->block_count; i++) {
+        uint32_t word_index = i / 32;
+        uint32_t bit_index = i % 32;
+
+        if (!(mount->block_bitmap[word_index] & (1 << bit_index))) {
+            mount->block_bitmap[word_index] |= (1 << bit_index);
+            mount->superblock->free_blocks--;
+
+            // Écrire le bitmap mis à jour
+            device_t* dev = find_device_by_id(mount->device);
+            if (!dev) {
+                return 0;
+            }
+
+            if (write_device(dev, mount->block_bitmap,
+                           (mount->superblock->block_count + 31) / 32 * sizeof(uint32_t),
+                           mount->group_descriptors[0].block_bitmap * BLOCK_SIZE) !=
+                (mount->superblock->block_count + 31) / 32 * sizeof(uint32_t)) {
+                return 0;
+            }
+
+            return i + mount->superblock->first_data_block;
+        }
+    }
+
     return 0;
 }
 
-void free_block(mount_point_t* mp, uint32_t block_number) {
-    uint32_t group = (block_number - mp->superblock->first_data_block) / mp->superblock->blocks_per_group;
-    uint32_t index = (block_number - mp->superblock->first_data_block) % mp->superblock->blocks_per_group;
+void free_block(mount_point_t* mount, uint32_t block_number) {
+    if (block_number < mount->superblock->first_data_block ||
+        block_number >= mount->superblock->first_data_block + mount->superblock->block_count) {
+        return;
+    }
 
-    mp->block_bitmap[group * mp->superblock->blocks_per_group / 8 + index / 8] &= ~(1 << (index % 8));
-    mp->group_descriptors[group].free_blocks++;
-    mp->superblock->free_blocks++;
+    uint32_t index = block_number - mount->superblock->first_data_block;
+    uint32_t word_index = index / 32;
+    uint32_t bit_index = index % 32;
+
+    mount->block_bitmap[word_index] &= ~(1 << bit_index);
+    mount->superblock->free_blocks++;
+
+    // Écrire le bitmap mis à jour
+    device_t* dev = find_device_by_id(mount->device);
+    if (!dev) {
+        return;
+    }
+
+    write_device(dev, mount->block_bitmap,
+                (mount->superblock->block_count + 31) / 32 * sizeof(uint32_t),
+                mount->group_descriptors[0].block_bitmap * BLOCK_SIZE);
 } 

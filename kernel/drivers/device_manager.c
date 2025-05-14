@@ -12,26 +12,26 @@ typedef enum {
     DEVICE_TYPE_BLOCK,
     DEVICE_TYPE_NETWORK,
     DEVICE_TYPE_DISPLAY,
-    DEVICE_TYPE_KEYBOARD,
-    DEVICE_TYPE_MOUSE,
     DEVICE_TYPE_SOUND,
-    DEVICE_TYPE_UNKNOWN
+    DEVICE_TYPE_INPUT
 } device_type_t;
 
 typedef enum {
-    DEVICE_STATE_UNKNOWN,
     DEVICE_STATE_READY,
     DEVICE_STATE_BUSY,
-    DEVICE_STATE_ERROR
+    DEVICE_STATE_ERROR,
+    DEVICE_STATE_OFFLINE
 } device_state_t;
 
 typedef struct {
     uint32_t id;
-    device_type_t type;
     char name[32];
+    device_type_t type;
     device_state_t state;
-    void* driver_data;
-    bool initialized;
+    void* driver;
+    void* data;
+    uint32_t irq;
+    uint8_t dma_channel;
 } device_t;
 
 typedef struct {
@@ -45,18 +45,19 @@ typedef struct {
 } driver_t;
 
 typedef struct {
-    uint8_t irq;
+    uint32_t irq;
     void (*handler)(void*);
     void* data;
 } irq_handler_t;
 
 typedef struct {
     device_t devices[MAX_DEVICES];
-    driver_t drivers[MAX_DRIVERS];
-    irq_handler_t irq_handlers[MAX_IRQ_HANDLERS];
     uint32_t device_count;
+    driver_t drivers[MAX_DRIVERS];
     uint32_t driver_count;
+    irq_handler_t irq_handlers[MAX_IRQ_HANDLERS];
     uint32_t irq_handler_count;
+    bool dma_channels[MAX_DMA_CHANNELS];
 } device_manager_t;
 
 device_manager_t device_manager;
@@ -74,44 +75,82 @@ bool register_driver(const driver_t* driver) {
     return true;
 }
 
+bool unregister_driver(const char* name) {
+    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
+        if (strcmp(device_manager.drivers[i].name, name) == 0) {
+            memmove(&device_manager.drivers[i],
+                    &device_manager.drivers[i + 1],
+                    (device_manager.driver_count - i - 1) * sizeof(driver_t));
+            device_manager.driver_count--;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool register_device(device_t* device) {
     if (device_manager.device_count >= MAX_DEVICES) {
         return false;
     }
 
-    device->id = device_manager.device_count;
+    // Trouver le pilote correspondant
+    driver_t* driver = NULL;
+    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
+        if (device_manager.drivers[i].type == device->type) {
+            driver = &device_manager.drivers[i];
+            break;
+        }
+    }
+
+    if (!driver) {
+        return false;
+    }
+
+    // Initialiser le périphérique
+    device->driver = driver;
+    device->state = DEVICE_STATE_READY;
+
+    if (!driver->init(device)) {
+        return false;
+    }
+
     memcpy(&device_manager.devices[device_manager.device_count++], device, sizeof(device_t));
     return true;
 }
 
-void unregister_device(uint32_t device_id) {
-    if (device_id >= device_manager.device_count) {
-        return;
-    }
+bool unregister_device(uint32_t device_id) {
+    for (uint32_t i = 0; i < device_manager.device_count; i++) {
+        if (device_manager.devices[i].id == device_id) {
+            device_t* device = &device_manager.devices[i];
+            driver_t* driver = (driver_t*)device->driver;
 
-    device_t* device = &device_manager.devices[device_id];
-    if (device->initialized) {
-        // Trouver le pilote correspondant
-        for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-            if (device_manager.drivers[i].type == device->type) {
-                device_manager.drivers[i].deinit(device);
-                break;
+            // Désinitialiser le périphérique
+            if (driver && driver->deinit) {
+                driver->deinit(device);
             }
+
+            // Libérer le canal DMA
+            if (device->dma_channel < MAX_DMA_CHANNELS) {
+                device_manager.dma_channels[device->dma_channel] = false;
+            }
+
+            memmove(&device_manager.devices[i],
+                    &device_manager.devices[i + 1],
+                    (device_manager.device_count - i - 1) * sizeof(device_t));
+            device_manager.device_count--;
+            return true;
         }
     }
-
-    // Supprimer le périphérique
-    memmove(&device_manager.devices[device_id],
-            &device_manager.devices[device_id + 1],
-            (device_manager.device_count - device_id - 1) * sizeof(device_t));
-    device_manager.device_count--;
+    return false;
 }
 
 device_t* find_device_by_id(uint32_t device_id) {
-    if (device_id >= device_manager.device_count) {
-        return NULL;
+    for (uint32_t i = 0; i < device_manager.device_count; i++) {
+        if (device_manager.devices[i].id == device_id) {
+            return &device_manager.devices[i];
+        }
     }
-    return &device_manager.devices[device_id];
+    return NULL;
 }
 
 device_t* find_device_by_type(device_type_t type) {
@@ -123,84 +162,70 @@ device_t* find_device_by_type(device_type_t type) {
     return NULL;
 }
 
-bool initialize_device(device_t* device) {
-    if (!device || device->initialized) {
+bool init_device(device_t* device) {
+    if (!device || !device->driver) {
         return false;
     }
 
-    // Trouver le pilote correspondant
-    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-        if (device_manager.drivers[i].type == device->type) {
-            if (device_manager.drivers[i].init(device)) {
-                device->initialized = true;
-                device->state = DEVICE_STATE_READY;
-                return true;
-            }
-            return false;
-        }
+    driver_t* driver = (driver_t*)device->driver;
+    if (!driver->init) {
+        return false;
     }
-    return false;
+
+    return driver->init(device);
 }
 
-void deinitialize_device(device_t* device) {
-    if (!device || !device->initialized) {
+void deinit_device(device_t* device) {
+    if (!device || !device->driver) {
         return;
     }
 
-    // Trouver le pilote correspondant
-    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-        if (device_manager.drivers[i].type == device->type) {
-            device_manager.drivers[i].deinit(device);
-            device->initialized = false;
-            device->state = DEVICE_STATE_UNKNOWN;
-            break;
-        }
+    driver_t* driver = (driver_t*)device->driver;
+    if (driver->deinit) {
+        driver->deinit(device);
     }
 }
 
 int read_device(device_t* device, void* buffer, size_t size, size_t offset) {
-    if (!device || !device->initialized || !buffer || size == 0) {
+    if (!device || !device->driver || !buffer) {
         return -1;
     }
 
-    // Trouver le pilote correspondant
-    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-        if (device_manager.drivers[i].type == device->type) {
-            return device_manager.drivers[i].read(device, buffer, size, offset);
-        }
+    driver_t* driver = (driver_t*)device->driver;
+    if (!driver->read) {
+        return -1;
     }
-    return -1;
+
+    return driver->read(device, buffer, size, offset);
 }
 
 int write_device(device_t* device, const void* buffer, size_t size, size_t offset) {
-    if (!device || !device->initialized || !buffer || size == 0) {
+    if (!device || !device->driver || !buffer) {
         return -1;
     }
 
-    // Trouver le pilote correspondant
-    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-        if (device_manager.drivers[i].type == device->type) {
-            return device_manager.drivers[i].write(device, buffer, size, offset);
-        }
+    driver_t* driver = (driver_t*)device->driver;
+    if (!driver->write) {
+        return -1;
     }
-    return -1;
+
+    return driver->write(device, buffer, size, offset);
 }
 
 int ioctl_device(device_t* device, uint32_t request, void* arg) {
-    if (!device || !device->initialized) {
+    if (!device || !device->driver) {
         return -1;
     }
 
-    // Trouver le pilote correspondant
-    for (uint32_t i = 0; i < device_manager.driver_count; i++) {
-        if (device_manager.drivers[i].type == device->type) {
-            return device_manager.drivers[i].ioctl(device, request, arg);
-        }
+    driver_t* driver = (driver_t*)device->driver;
+    if (!driver->ioctl) {
+        return -1;
     }
-    return -1;
+
+    return driver->ioctl(device, request, arg);
 }
 
-bool register_irq_handler(uint8_t irq, void (*handler)(void*), void* data) {
+bool register_irq_handler(uint32_t irq, void (*handler)(void*), void* data) {
     if (device_manager.irq_handler_count >= MAX_IRQ_HANDLERS) {
         return false;
     }
@@ -220,7 +245,7 @@ bool register_irq_handler(uint8_t irq, void (*handler)(void*), void* data) {
     return true;
 }
 
-void unregister_irq_handler(uint8_t irq) {
+bool unregister_irq_handler(uint32_t irq) {
     for (uint32_t i = 0; i < device_manager.irq_handler_count; i++) {
         if (device_manager.irq_handlers[i].irq == irq) {
             // Désactiver l'IRQ dans le PIC
@@ -230,20 +255,23 @@ void unregister_irq_handler(uint8_t irq) {
                 outb(0xA1, inb(0xA1) | (1 << (irq - 8)));
             }
 
-            // Supprimer le gestionnaire
             memmove(&device_manager.irq_handlers[i],
                     &device_manager.irq_handlers[i + 1],
                     (device_manager.irq_handler_count - i - 1) * sizeof(irq_handler_t));
             device_manager.irq_handler_count--;
-            break;
+            return true;
         }
     }
+    return false;
 }
 
-void handle_device_interrupt(uint8_t irq) {
+void handle_irq(uint32_t irq) {
     for (uint32_t i = 0; i < device_manager.irq_handler_count; i++) {
         if (device_manager.irq_handlers[i].irq == irq) {
-            device_manager.irq_handlers[i].handler(device_manager.irq_handlers[i].data);
+            irq_handler_t* handler = &device_manager.irq_handlers[i];
+            if (handler->handler) {
+                handler->handler(handler->data);
+            }
             break;
         }
     }
@@ -255,13 +283,28 @@ void handle_device_interrupt(uint8_t irq) {
     outb(0x20, 0x20);
 }
 
-// Fonctions utilitaires pour les périphériques courants
+uint8_t allocate_dma_channel() {
+    for (uint8_t i = 0; i < MAX_DMA_CHANNELS; i++) {
+        if (!device_manager.dma_channels[i]) {
+            device_manager.dma_channels[i] = true;
+            return i;
+        }
+    }
+    return 0xFF;
+}
+
+void free_dma_channel(uint8_t channel) {
+    if (channel < MAX_DMA_CHANNELS) {
+        device_manager.dma_channels[channel] = false;
+    }
+}
+
 device_t* get_keyboard_device() {
-    return find_device_by_type(DEVICE_TYPE_KEYBOARD);
+    return find_device_by_type(DEVICE_TYPE_INPUT);
 }
 
 device_t* get_mouse_device() {
-    return find_device_by_type(DEVICE_TYPE_MOUSE);
+    return find_device_by_type(DEVICE_TYPE_INPUT);
 }
 
 device_t* get_display_device() {
