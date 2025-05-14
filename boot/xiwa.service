@@ -1,0 +1,14 @@
+[Unit]
+Description=XiwA OS
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/init
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target 
